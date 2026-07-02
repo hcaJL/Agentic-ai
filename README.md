@@ -23,22 +23,48 @@
 
 ## 快速開始
 
+### Phase 0 — 離線跑通（5 分鐘，不需要 Stockfish 或 API key）
+
 ```bash
-pip install -r requirements.txt        # 初版其實只需要 python-chess + streamlit
+# 1) 安裝最小依賴
+pip install python-chess streamlit
 
-# 1) 下載 Stockfish，設定路徑（不設就用 mock 引擎，仍可跑）
-#    https://stockfishchess.org/download/
-export STOCKFISH_PATH=/path/to/stockfish
+# 2) 命令列跑內建 demo（用 mock 引擎，看路由判定是否合理）
+python3 demo_cli.py
+# 預期輸出：
+#   [routine |light] … (silent)
+#   [critical|deep ] (play_by_play) 6. Nxf7 （capture、sacrifice）…
+#   [notable |light] (play_by_play) 7. Qf3+ 將軍！…
 
-# 2) 接真 LLM（不設就用接地模板）
-export ANTHROPIC_API_KEY=sk-...
-
-# 命令列跑一局
-python demo_cli.py
-python demo_cli.py games/demo.pgn excited
-
-# 開介面
+# 3) 跑 Streamlit 介面
 streamlit run app.py
+# 開瀏覽器 http://localhost:8501，按「▶ 下一步」逐步播報
+```
+
+### Phase 1 — 接真引擎（讓評估數字有意義）
+
+```bash
+# 下載 Stockfish binary：https://stockfishchess.org/download/
+# Linux/WSL 範例：
+wget https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-ubuntu-x86-64.tar
+tar xf stockfish-ubuntu-x86-64.tar
+
+export STOCKFISH_PATH=/path/to/stockfish   # 指向解壓後的 binary
+python3 demo_cli.py                        # 評估數字變正常，開始調門檻
+```
+
+### Phase 3 — 接真 LLM 播報
+
+```bash
+pip install langchain-anthropic
+export ANTHROPIC_API_KEY=sk-ant-...
+python3 demo_cli.py                        # booth.py 自動切換到 LLM 生成
+```
+
+### 完整依賴（一次裝到位）
+
+```bash
+pip install -r requirements.txt
 ```
 
 ## 結構
