@@ -16,7 +16,8 @@
 
 ## 還沒做（接下來照 spec 補）
 
-- ⬜ 真 LLM 播報（接 `langchain-anthropic`，見 `graph/nodes/booth.py` 的 `_llm_generate`）
+- ✅ **真 LLM 播報**（OpenAI gpt-4o / gpt-4o-mini，見 `graph/nodes/booth.py`）
+- ⬜ Stockfish 真引擎（目前 mock，評估數字是假的）
 - ⬜ ChromaDB 分層記憶第 2 層（棋理檢索，見 `graph/nodes/memory.py` 的 TODO）
 - ⬜ LangGraph 化（`graph/build_graph.py` 已備好，跑 `pip install langgraph` 即可切換）
 - ⬜ 三層消融 harness、TTS 語音、棋手風格檔
@@ -49,17 +50,25 @@ streamlit run app.py
 wget https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-ubuntu-x86-64.tar
 tar xf stockfish-ubuntu-x86-64.tar
 
-export STOCKFISH_PATH=/path/to/stockfish   # 指向解壓後的 binary
-python3 demo_cli.py                        # 評估數字變正常，開始調門檻
+# 把路徑加進 .env（和 OPENAI_API_KEY 放一起）
+echo "STOCKFISH_PATH=/path/to/stockfish" >> .env
+
+python3 demo_cli.py   # 評估數字變正常，開始調 config.py 門檻
 ```
 
-### Phase 3 — 接真 LLM 播報
+### Phase 3 — 接真 LLM 播報（已完成）
 
 ```bash
-pip install langchain-anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
-python3 demo_cli.py                        # booth.py 自動切換到 LLM 生成
+pip install langchain-openai langchain python-dotenv
+
+# 把 API key 填進 .env（此檔不會被 git 追蹤）
+echo "OPENAI_API_KEY=sk-proj-你的key" > .env
+
+python3 demo_cli.py   # critical/deep 步驟自動切換成 GPT 生成播報
 ```
+
+> 使用 `gpt-4o-mini`（routine/light）和 `gpt-4o`（critical/deep）。
+> 模型名稱在 `config.py` 的 `LIGHT_MODEL` / `DEEP_MODEL` 調整。
 
 ### 完整依賴（一次裝到位）
 

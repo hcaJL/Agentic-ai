@@ -1,13 +1,14 @@
 # Core (initial version runs with just these two + Stockfish binary)
 python-chess>=1.11,<2.0
 streamlit>=1.30
+python-dotenv>=1.0
 
 # Graduate to LangGraph (M2+)
 langgraph>=0.2
 langchain>=0.3
 
-# Real LLM commentary (set ANTHROPIC_API_KEY)
-langchain-anthropic>=0.2
+# Real LLM commentary (set OPENAI_API_KEY)
+langchain-openai>=0.2
 
 # Layered memory (M3)
 chromadb>=0.5

@@ -1,5 +1,7 @@
 """Central config. Tune SEVERITY thresholds here — they drive the whole router."""
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 # --- Stockfish ---
 # Point this at your local Stockfish binary. Download: https://stockfishchess.org/download/
@@ -16,9 +18,9 @@ BRILLIANT_GAP = 150         # only-move gap to 2nd best -> brilliant (critical)
 SAC_MIN_MATERIAL = 3        # >= a minor piece given up -> candidate sacrifice
 
 # --- LLM (plug in when ready). Leave commentary offline-templated if unset. ---
-USE_LLM = bool(os.environ.get("ANTHROPIC_API_KEY"))
-LIGHT_MODEL = "claude-haiku-4-5-20251001"   # routine moves: cheap/fast
-DEEP_MODEL = "claude-sonnet-4-6"            # critical moves: strong
+USE_LLM = bool(os.environ.get("OPENAI_API_KEY"))
+LIGHT_MODEL = "gpt-4o-mini"   # routine moves: cheap/fast
+DEEP_MODEL = "gpt-4o"         # critical moves: strong
 
 # --- Register intensity by severity label (tone is derived, not user-picked) ---
 INTENSITY = {"routine": 0.2, "notable": 0.55, "critical": 0.9}

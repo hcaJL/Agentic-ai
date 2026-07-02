@@ -59,9 +59,9 @@ def _generate(facts: dict, speaker: str) -> str:
 
 
 def _llm_generate(facts: dict, speaker: str) -> str:
-    from langchain_anthropic import ChatAnthropic
+    from langchain_openai import ChatOpenAI
     model = config.DEEP_MODEL if speaker == "analyst" else config.LIGHT_MODEL
-    llm = ChatAnthropic(model=model, max_tokens=200)
+    llm = ChatOpenAI(model=model, max_tokens=200)
     sys = persona_prompt(facts["register"]["persona"], facts["register"]["intensity"])
     role = "你是戰略分析師，解釋『為什麼』。" if speaker == "analyst" else "你是即時主播，描述剛發生的事。"
     msg = (f"{sys}\n{role}\n以下是唯一可用的事實，請用一兩句口語播報：\n{facts}")
