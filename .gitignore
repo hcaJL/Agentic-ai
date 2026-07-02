@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+*.env
+.env.*
+
+# Stockfish binary (user-local, not committed)
+stockfish
+stockfish.exe
+stockfish-*
+
+# ChromaDB data (runtime data, not source)
+chroma_data/
+*.sqlite3
+
+# Streamlit
+.streamlit/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
