@@ -46,16 +46,19 @@ with col1:
     c1, c2 = st.columns(2)
     if c1.button("▶ 下一步", use_container_width=True,
                  disabled=st.session_state.ply >= len(st.session_state.moves)):
-        mv = st.session_state.moves[st.session_state.ply]
-        st.session_state.state["last_move"] = mv
-        st.session_state.state = process_move(st.session_state.state,
-                                              st.session_state.engine, persona)
-        ev = st.session_state.state["event"]
-        for turn in st.session_state.state["commentary"]:
-            st.session_state.feed.append(
-                (ev["severity_label"], st.session_state.state["route"],
-                 turn["speaker"], turn["text"]))
-        st.session_state.ply += 1
+        # Guard against double-fired clicks: only advance if the board's actual
+        # move count still matches `ply` (i.e. this click hasn't already been applied).
+        if len(board.move_stack) == st.session_state.ply:
+            mv = st.session_state.moves[st.session_state.ply]
+            st.session_state.state["last_move"] = mv
+            st.session_state.state = process_move(st.session_state.state,
+                                                  st.session_state.engine, persona)
+            ev = st.session_state.state["event"]
+            for turn in st.session_state.state["commentary"]:
+                st.session_state.feed.append(
+                    (ev["severity_label"], st.session_state.state["route"],
+                     turn["speaker"], turn["text"]))
+            st.session_state.ply += 1
         st.rerun()
     if c2.button("⟲ 重置", use_container_width=True):
         st.session_state.ply = 0

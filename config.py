@@ -14,7 +14,7 @@ MULTIPV = 3                 # top-N lines
 DELTA_NOTABLE = 50          # |delta| >= this -> at least notable
 DELTA_CRITICAL = 150        # |delta| >= this -> critical
 BLUNDER_DROP = 200          # eval drop against mover -> blunder (critical)
-BRILLIANT_GAP = 150         # only-move gap to 2nd best -> brilliant (critical)
+BRILLIANT_GAP = 300         # only-move gap to 2nd best -> brilliant (critical)
 SAC_MIN_MATERIAL = 3        # >= a minor piece given up -> candidate sacrifice
 
 # --- LLM (plug in when ready). Leave commentary offline-templated if unset. ---
