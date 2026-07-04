@@ -1,0 +1,17 @@
+[Event "Kasparov Simul"]
+[Date "2025.10.21"]
+[Round "1"]
+[White "Kasparov, Garry"]
+[Black "Lucas Vermeulen"]
+[Result "1-0"]
+[Board "5"]
+[TimeControl "5400+0"]
+[WhiteFideId "4100018"]
+[WhiteTitle "GM"]
+[WhiteElo "2812"]
+[WhiteTeam "RUS"]
+[WhiteClock "0:00:00"]
+[BlackClock "0:00:00"]
+[Variant "Standard"]
+
+1. e4 {[%clk 1:30:00]}  d6 {[%clk 0:00:00]} 2. d4 {[%clk 1:30:00]}  c5 {[%clk 0:00:00]} 3. c3 {[%clk 1:29:57]}  Be6 {[%clk 0:00:00]} 4. Nf3 {[%clk 1:29:55]}  Na6 {[%clk 0:00:00]} 5. d5 {[%clk 1:29:51]}  Nh6 {[%clk 0:00:00]} 6. dxe6 {[%clk 0:00:00]}  fxe6 {[%clk 0:00:00]} 7. Bb5+ {[%clk 0:00:00]}  Kf7 {[%clk 0:00:00]} 8. Ng5+ {[%clk 0:00:00]}  Kf6 {[%clk 0:00:00]} 9. Qf3+ {[%clk 0:00:00]}  Ke5 {[%clk 0:00:00]} 10. Qf4# {[%clk 0:00:00]} 1-0

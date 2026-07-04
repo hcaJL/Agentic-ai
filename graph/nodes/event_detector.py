@@ -68,7 +68,9 @@ NOTABLE_EVENTS = {"check", "major_capture"}
 
 
 def _severity_score(delta_cp: int, types: list, motifs: list) -> float:
-    score = min(abs(delta_cp) / 300.0, 1.0)
+    score = min(abs(delta_cp) / config.DELTA_CRITICAL, 1.0)
+    if abs(delta_cp) >= config.DELTA_NOTABLE:
+        score = max(score, 0.4)
     if any(t in CRITICAL_EVENTS for t in types):
         score = max(score, 0.9)
     if any(t in NOTABLE_EVENTS for t in types) or motifs:
