@@ -3,10 +3,11 @@
     pip install streamlit
     streamlit run app.py
 """
+import sys
 import streamlit as st
 import chess, chess.svg
 from engine.stockfish_client import StockfishClient
-from pipeline import process_move
+from pipeline import process_move, moves_from_pgn
 
 st.set_page_config(page_title="Chess Broadcaster", layout="wide")
 
@@ -23,12 +24,16 @@ def san_to_moves(san_list):
 
 if "engine" not in st.session_state:
     st.session_state.engine = StockfishClient()
-    st.session_state.moves = san_to_moves(DEMO_SAN)
+    if len(sys.argv) >= 2:
+        st.session_state.moves = moves_from_pgn(sys.argv[1])
+    else:
+        st.session_state.moves = san_to_moves(DEMO_SAN)
     st.session_state.ply = 0
     st.session_state.state = {"board": chess.Board(), "move_history": [], "said_so_far": []}
     st.session_state.feed = []
 
 st.title("♟️ Agentic 西洋棋主播")
+st.sidebar.caption(f"棋局：{sys.argv[1] if len(sys.argv) >= 2 else '內建 demo'}")
 persona = st.sidebar.radio("主播風格", ["calm", "excited", "literary"], index=0)
 if st.session_state.engine.mock:
     st.sidebar.warning("MOCK 引擎模式。設定 STOCKFISH_PATH 取得真實評估。")
