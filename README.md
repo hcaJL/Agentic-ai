@@ -17,7 +17,7 @@
 ## 還沒做（接下來照 spec 補）
 
 - ✅ **真 LLM 播報**（OpenAI gpt-4o / gpt-4o-mini，見 `graph/nodes/booth.py`）
-- ⬜ Stockfish 真引擎（目前 mock，評估數字是假的）
+- ✅ Stockfish 真引擎（設好 `.env` 的 `STOCKFISH_PATH` 即自動切換；門檻已用真實棋局校過，驗證工具見 `tools/severity_report.py`）
 - ⬜ ChromaDB 分層記憶第 2 層（棋理檢索，見 `graph/nodes/memory.py` 的 TODO）
 - ⬜ LangGraph 化（`graph/build_graph.py` 已備好，跑 `pip install langgraph` 即可切換）
 - ⬜ 三層消融 harness、TTS 語音、棋手風格檔

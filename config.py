@@ -11,7 +11,7 @@ DEEP_DEPTH = 20             # deep path only (critical moves)
 MULTIPV = 3                 # top-N lines
 
 # --- Severity thresholds (centipawns). 100cp ~= one pawn. TUNE THESE. ---
-DELTA_NOTABLE = 50          # |delta| >= this -> at least notable
+DELTA_NOTABLE = 80          # |delta| >= this -> at least notable (depth-12 noise is ±50-70)
 DELTA_CRITICAL = 150        # |delta| >= this -> critical
 BLUNDER_DROP = 200          # eval drop against mover -> blunder (critical)
 BRILLIANT_GAP = 300         # only-move gap to 2nd best -> brilliant (critical)
