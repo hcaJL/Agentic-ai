@@ -16,13 +16,20 @@ def build_facts(state: dict, persona: str) -> dict:
     ev = state["event"]
     before = board.copy(); before.pop()
     piece = before.piece_at(move.from_square)
+    if before.is_en_passant(move):
+        captured = "pawn"
+    else:
+        victim = before.piece_at(move.to_square)
+        captured = chess.piece_name(victim.piece_type) if victim else None
 
     return {
         "move": {
             "san": before.san(move),
             "uci": move.uci(),
+            "played_by": "black" if board.turn else "white",  # mover = not side_to_move
             "piece": chess.piece_name(piece.piece_type) if piece else "",
             "is_capture": before.is_capture(move),
+            "captured": captured,
             "is_check": board.is_check(),
             "is_mate": board.is_checkmate(),
             "is_promotion": move.promotion is not None,
@@ -63,7 +70,13 @@ def _llm_generate(facts: dict, speaker: str) -> str:
     model = config.DEEP_MODEL if speaker == "analyst" else config.LIGHT_MODEL
     llm = ChatOpenAI(model=model, max_tokens=200)
     sys = persona_prompt(facts["register"]["persona"], facts["register"]["intensity"])
-    role = "你是戰略分析師，解釋『為什麼』。" if speaker == "analyst" else "你是即時主播，描述剛發生的事。"
+    if speaker == "analyst":
+        role = ("你是戰略分析師，解釋『為什麼』。"
+                "memory.theory 是檢索到的棋理，若與當前局面相關，自然地融入解說（不相關就忽略）。"
+                "memory.callbacks 是本局先前的關鍵時刻，適合時回扣它們"
+                "（例如「還記得第 N 手的…」），讓解說有整局脈絡。")
+    else:
+        role = "你是即時主播，描述剛發生的事。"
     msg = (f"{sys}\n{role}\n以下是唯一可用的事實，請用一兩句口語播報：\n{facts}")
     return llm.invoke(msg).content.strip()
 
