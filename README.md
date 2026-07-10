@@ -20,8 +20,22 @@
 - ✅ Stockfish 真引擎（設好 `.env` 的 `STOCKFISH_PATH` 即自動切換；門檻已用真實棋局校過，驗證工具見 `tools/severity_report.py`）
 - ✅ ChromaDB 分層記憶第 2 層（棋理檢索，語料在 `memory/theory_seed.py`；沒裝 chromadb 時自動退回關鍵字比對）
 - ✅ 三層消融 harness（`tools/ablation.py`，baseline / rag / full 對照＋盲評，報告在 `eval_out/`）
-- ⬜ LangGraph 化（`graph/build_graph.py` 已備好，跑 `pip install langgraph` 即可切換）
+- ✅ LangGraph 化（裝了 `langgraph` 自動走圖，沒裝退回 sequential；Director 路由是圖上真正的 conditional edge）
 - ⬜ TTS 語音、棋手風格檔
+
+## 架構（LangGraph）
+
+```mermaid
+graph TD
+    S([每一手]) --> perception --> detect_event --> director
+    director -. "light（routine/notable）" .-> light
+    director -. "deep（critical）" .-> retrieve_memory --> booth
+    light --> update_memory
+    booth --> update_memory
+    update_memory --> E([下一手])
+```
+
+`director` 的分流是 `add_conditional_edges`——這是整個系統的 agentic 核心：例行步走便宜的 `light`（多半靜默），關鍵步才觸發 `retrieve_memory`（ChromaDB 棋理 + 本局回扣）與雙主播 `booth`。
 
 ## 快速開始
 

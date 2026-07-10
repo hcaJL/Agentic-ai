@@ -43,3 +43,10 @@ class BroadcastState(TypedDict, total=False):
     commentary: list            # [{"speaker":..., "text":...}, ...]
     said_so_far: list           # short-term memory: one-line summaries of past key moments
     persona: str
+    register_intensity: float
+    # internal scratch keys written by nodes — must be declared so LangGraph
+    # keeps them as channels between steps
+    _phase: str
+    _material: int
+    _prev_phase: str
+    _light_streak: int

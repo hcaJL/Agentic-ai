@@ -7,7 +7,7 @@ import sys
 import streamlit as st
 import chess, chess.svg
 from engine.stockfish_client import StockfishClient
-from pipeline import process_move, moves_from_pgn
+from pipeline import make_stepper, moves_from_pgn
 
 st.set_page_config(page_title="Chess Broadcaster", layout="wide")
 
@@ -24,6 +24,7 @@ def san_to_moves(san_list):
 
 if "engine" not in st.session_state:
     st.session_state.engine = StockfishClient()
+    st.session_state.step, st.session_state.flow = make_stepper(st.session_state.engine)
     if len(sys.argv) >= 2:
         st.session_state.moves = moves_from_pgn(sys.argv[1])
     else:
@@ -33,7 +34,7 @@ if "engine" not in st.session_state:
     st.session_state.feed = []
 
 st.title("♟️ Agentic 西洋棋主播")
-st.sidebar.caption(f"棋局：{sys.argv[1] if len(sys.argv) >= 2 else '內建 demo'}")
+st.sidebar.caption(f"棋局：{sys.argv[1] if len(sys.argv) >= 2 else '內建 demo'} · 流程：{st.session_state.flow}")
 persona = st.sidebar.radio("主播風格", ["calm", "excited", "literary"], index=0)
 if st.session_state.engine.mock:
     st.sidebar.warning("MOCK 引擎模式。設定 STOCKFISH_PATH 取得真實評估。")
@@ -56,8 +57,9 @@ with col1:
         if len(board.move_stack) == st.session_state.ply:
             mv = st.session_state.moves[st.session_state.ply]
             st.session_state.state["last_move"] = mv
-            st.session_state.state = process_move(st.session_state.state,
-                                                  st.session_state.engine, persona)
+            st.session_state.state["persona"] = persona
+            st.session_state.state = st.session_state.step(st.session_state.state)
+            st.session_state.state["move_history"].append(mv)
             ev = st.session_state.state["event"]
             for turn in st.session_state.state["commentary"]:
                 st.session_state.feed.append(

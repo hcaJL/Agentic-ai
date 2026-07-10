@@ -1,5 +1,6 @@
-"""Sequential driver for the initial version. Same nodes drop into LangGraph later
-(see graph/build_graph.py). Keeps the initial version runnable with minimal deps.
+"""Per-move driver. Prefers the LangGraph app (graph/build_graph.py); falls back
+to running the same nodes sequentially when langgraph isn't installed, so the
+project stays runnable with minimal deps.
 """
 import chess
 import chess.pgn
@@ -10,9 +11,21 @@ from graph.nodes.memory import retrieve_memory_node, update_memory_node
 from graph.nodes.booth import light_commentary_node, booth_node
 
 
+def make_stepper(engine, persona: str = "calm"):
+    """Return (step_fn, mode). step_fn(state) runs one move through the pipeline.
+    mode is "langgraph", or "sequential" when langgraph isn't installed."""
+    try:
+        from graph.build_graph import build_graph
+        app = build_graph(engine, persona)
+        return (lambda state: app.invoke(state)), "langgraph"
+    except ImportError:
+        return (lambda state: process_move(state, engine,
+                                           state.get("persona", persona))), "sequential"
+
+
 def process_move(state: dict, engine, persona: str = "calm") -> dict:
-    """Run one move through the full pipeline. `state['board']` must be the position
-    BEFORE the move, with `state['last_move']` set."""
+    """Sequential fallback: run one move through the same nodes LangGraph wires up.
+    `state['board']` must be the position BEFORE the move, with `state['last_move']` set."""
     state = perception_node(state, engine)        # board is now AFTER the move
     state = event_detector_node(state)
     state = director_node(state)
@@ -29,11 +42,12 @@ def process_move(state: dict, engine, persona: str = "calm") -> dict:
 
 def run_game(moves, engine, persona: str = "calm", start_fen: str = None):
     """Generator: yields (move, state) after each move so a UI can render live."""
+    step, _ = make_stepper(engine, persona)
     board = chess.Board(start_fen) if start_fen else chess.Board()
-    state = {"board": board, "move_history": [], "said_so_far": []}
+    state = {"board": board, "move_history": [], "said_so_far": [], "persona": persona}
     for mv in moves:
         state["last_move"] = mv
-        state = process_move(state, engine, persona)
+        state = step(state)
         state["move_history"].append(mv)
         yield mv, state
 
