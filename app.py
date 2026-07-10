@@ -65,6 +65,12 @@ with col1:
             st.session_state.state = st.session_state.step(st.session_state.state)
             st.session_state.state["move_history"].append(mv)
             ev = st.session_state.state["event"]
+            if not st.session_state.state["commentary"]:
+                # routine moves are silent by design — still show a muted line so
+                # the feed visibly advances
+                st.session_state.feed.append(
+                    (ev["severity_label"], st.session_state.state["route"], None,
+                     st.session_state.state["analysis"]["played_san"], None))
             clips = []
             for turn in st.session_state.state["commentary"]:
                 audio = tts.speak(turn["text"], turn["speaker"],
@@ -93,6 +99,9 @@ with col2:
         st.audio(st.session_state.new_audio, format="audio/mp3", autoplay=True)
         st.session_state.new_audio = None  # autoplay once, not on every rerun
     for label, route, speaker, text, audio in reversed(st.session_state.feed):
+        if speaker is None:
+            st.caption(f"⚪ {text} ·（例行步，靜默）")
+            continue
         color = {"critical": "🔴", "notable": "🟡", "routine": "⚪"}[label]
         st.markdown(f"{color} **{speaker}** · `{route}`  \n{text}")
         if audio:
