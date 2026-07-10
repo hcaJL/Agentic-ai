@@ -21,7 +21,8 @@
 - ✅ ChromaDB 分層記憶第 2 層（棋理檢索，語料在 `memory/theory_seed.py`；沒裝 chromadb 時自動退回關鍵字比對）
 - ✅ 三層消融 harness（`tools/ablation.py`，baseline / rag / full 對照＋盲評，報告在 `eval_out/`）
 - ✅ LangGraph 化（裝了 `langgraph` 自動走圖，沒裝退回 sequential；Director 路由是圖上真正的 conditional edge）
-- ⬜ TTS 語音、棋手風格檔
+- ✅ TTS 語音（OpenAI TTS，`tts.py`；兩位主播不同聲線，語氣跟著 register 強度走。Streamlit 側欄開「🔊 語音播報」）
+- ⬜ 棋手風格檔（分層記憶第 3 層，stretch）
 
 ## 架構（LangGraph）
 

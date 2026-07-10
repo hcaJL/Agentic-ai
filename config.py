@@ -24,3 +24,7 @@ DEEP_MODEL = "gpt-4o"         # critical moves: strong
 
 # --- Register intensity by severity label (tone is derived, not user-picked) ---
 INTENSITY = {"routine": 0.2, "notable": 0.55, "critical": 0.9}
+
+# --- TTS (M5). Uses the same OPENAI_API_KEY; delivery follows register intensity. ---
+TTS_MODEL = "gpt-4o-mini-tts"
+TTS_VOICES = {"play_by_play": "nova", "analyst": "onyx"}
