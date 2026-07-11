@@ -65,6 +65,17 @@ class StockfishClient:
                 "best_line_san": [board.san(legal[0])] if legal else [],
                 "top_moves": top, "depth": depth}
 
+    def best_move(self, board: chess.Board, depth: int = 8):
+        """Pick a move to play (engine opponent). Mock mode: first legal move."""
+        res = self.analyse(board, depth)
+        if res["best_line_san"]:
+            try:
+                return board.parse_san(res["best_line_san"][0])
+            except ValueError:
+                pass
+        legal = list(board.legal_moves)
+        return legal[0] if legal else None
+
     def close(self):
         if self._engine:
             self._engine.quit()

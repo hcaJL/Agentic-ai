@@ -24,6 +24,19 @@
 - ✅ TTS 語音（OpenAI TTS，`tts.py`；兩位主播不同聲線，語氣跟著 register 強度走。Streamlit 側欄開「🔊 語音播報」）
 - ⬜ 棋手風格檔（分層記憶第 3 層，stretch）
 
+## 對弈模式（feature/human-play）
+
+自己下棋、讓主播台實況解說你的對局：
+
+```bash
+.venv/bin/streamlit run play.py
+```
+
+- 對手可選 **Stockfish**（側欄可調搜索深度 2–16）或**雙人對弈**
+- 執黑時棋盤自動翻轉，開局按「🤖 讓引擎走棋」
+- 你的每一步與引擎的回應都走同一條 LangGraph 管線：例行步靜默、
+  關鍵步觸發雙主播＋棋理引用＋回扣，TTS 語音照常可開
+
 ## 架構（LangGraph）
 
 ```mermaid
