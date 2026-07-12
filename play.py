@@ -6,7 +6,7 @@ import io
 import streamlit as st
 import chess, chess.svg
 import cairosvg
-from PIL import Image
+from PIL import Image, ImageDraw
 from streamlit_image_coordinates import streamlit_image_coordinates
 import config
 import tts
@@ -20,10 +20,9 @@ st.set_page_config(
 )
 
 # ── Board constants ────────────────────────────────────────────────────────────
-BOARD_PX = 480
-# python-chess uses a fixed 15px margin for coordinate labels (verified from source)
-COORD_MARGIN = 15
-SQ_PX = (BOARD_PX - 2 * COORD_MARGIN) / 8   # 56.25 px per square
+BOARD_PX = 560          # larger → crisper pieces
+COORD_MARGIN = 15       # python-chess uses a fixed 15px margin (verified from source)
+SQ_PX = (BOARD_PX - 2 * COORD_MARGIN) / 8   # 66.25 px per square
 
 # Lichess green theme
 BOARD_COLORS = {
@@ -53,27 +52,58 @@ hr { margin: 0.6rem 0 !important; }
 
 # ── Board helpers ──────────────────────────────────────────────────────────────
 
+def _sq_center(sq: chess.Square, orientation: chess.Color) -> tuple[float, float]:
+    """Pixel center of a square in the rendered board image."""
+    f = chess.square_file(sq)
+    r = chess.square_rank(sq)
+    fi = f if orientation == chess.WHITE else 7 - f
+    ri = (7 - r) if orientation == chess.WHITE else r
+    return (COORD_MARGIN + (fi + 0.5) * SQ_PX,
+            COORD_MARGIN + (ri + 0.5) * SQ_PX)
+
+
 def _board_image(board: chess.Board,
                  selected: chess.Square | None,
                  legal_dests: list[chess.Square],
                  orientation: chess.Color,
                  last_move: chess.Move | None) -> Image.Image:
+    # Semi-transparent tint on the selected square only; dots/rings drawn in PIL
     fill = {}
     if selected is not None:
-        fill[selected] = "#f6f669"
-        for sq in legal_dests:
-            fill[sq] = "#dd5555" if board.piece_at(sq) else "#66aa66"
+        fill[selected] = "#f6f669b0"   # semi-transparent yellow
+
     svg = chess.svg.board(
         board,
         fill=fill,
         lastmove=last_move,
         orientation=orientation,
         size=BOARD_PX,
-        coordinates=True,   # adds margin → pieces never touch the edge
+        coordinates=True,
         colors=BOARD_COLORS,
     )
     png = cairosvg.svg2png(bytestring=svg.encode())
-    return Image.open(io.BytesIO(png))
+    img = Image.open(io.BytesIO(png)).convert("RGBA")
+
+    # Lichess-style move hints: dot on empty squares, ring on capturable pieces
+    if selected is not None and legal_dests:
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        for sq in legal_dests:
+            cx, cy = _sq_center(sq, orientation)
+            if board.piece_at(sq):
+                # Ring around capturable piece
+                r = SQ_PX * 0.46
+                w = max(4, int(SQ_PX * 0.11))
+                draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)],
+                             fill=None, outline=(0, 0, 0, 120), width=w)
+            else:
+                # Small dot on empty square
+                r = SQ_PX * 0.165
+                draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)],
+                             fill=(0, 0, 0, 100))
+        img = Image.alpha_composite(img, overlay)
+
+    return img.convert("RGB")
 
 
 def _pixel_to_square(x: int, y: int, orientation: chess.Color) -> chess.Square:
@@ -121,13 +151,16 @@ with st.sidebar:
     persona = st.radio("主播風格", ["calm", "excited", "literary"], index=0)
     tts_on  = st.toggle("🔊 語音播報", value=False, disabled=not config.USE_LLM,
                         help="需要 OPENAI_API_KEY")
+    verbose = st.toggle("每步都播報", value=False,
+                        help="關閉後，例行步（評估變化 < 80分）保持靜默")
     st.divider()
     vs_engine      = st.radio("對手", ["Stockfish", "雙人對弈"], index=0) == "Stockfish"
     human_is_white = st.radio("你執", ["白", "黑"], index=0,
                               disabled=not vs_engine) == "白"
     engine_depth   = st.slider("引擎深度", 2, 16, 8, disabled=not vs_engine)
     if st.session_state.engine.mock:
-        st.warning("MOCK 引擎。設定 STOCKFISH_PATH 取得真實對弈。")
+        st.warning("MOCK 引擎：評估恆為 0，所有步都會是「例行步」。"
+                   "開啟「每步都播報」可強制播報；或設定 STOCKFISH_PATH 取得真實引擎。")
 
 # Cache sidebar values so the fragment can read them on partial reruns
 st.session_state["_persona"]        = persona
@@ -135,12 +168,14 @@ st.session_state["_vs_engine"]      = vs_engine
 st.session_state["_human_is_white"] = human_is_white
 st.session_state["_engine_depth"]   = engine_depth
 st.session_state["_tts_on"]        = tts_on
+st.session_state["_verbose"]        = verbose
 
 
 # ── Pipeline helper ────────────────────────────────────────────────────────────
 def play_one(mv: chess.Move):
-    _persona = st.session_state["_persona"]
-    _tts_on  = st.session_state["_tts_on"]
+    _persona  = st.session_state["_persona"]
+    _tts_on   = st.session_state["_tts_on"]
+    _verbose  = st.session_state.get("_verbose", False)
     s = st.session_state.state
     s["last_move"] = mv
     s["persona"]   = _persona
@@ -148,13 +183,25 @@ def play_one(mv: chess.Move):
     s["move_history"].append(mv)
     st.session_state.state = s
     ev = s["event"]
+
+    # Verbose mode: inject a simple commentary line for routine silent moves
+    commentary = s["commentary"]
+    if not commentary and _verbose:
+        san = s["analysis"]["played_san"]
+        commentary = [{"speaker": "play_by_play", "text": san}]
+
     clips = []
-    if not s["commentary"]:
+    if not commentary:
         st.session_state.feed.append(
             (ev["severity_label"], s["route"], None, s["analysis"]["played_san"], None))
-    for turn in s["commentary"]:
-        audio = tts.speak(turn["text"], turn["speaker"],
-                          s.get("register_intensity", 0.2)) if _tts_on else None
+    for turn in commentary:
+        audio = None
+        if _tts_on:
+            audio = tts.speak(turn["text"], turn["speaker"],
+                              s.get("register_intensity", 0.2))
+            if audio is None:
+                st.session_state.feed.append(
+                    ("routine", "tts-error", None, "⚠️ TTS 合成失敗", None))
         if audio:
             clips.append(audio)
         st.session_state.feed.append(

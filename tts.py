@@ -32,5 +32,7 @@ def speak(text: str, speaker: str, intensity: float = 0.2):
             instructions=_instructions(intensity),
         )
         return resp.content
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.warning("TTS failed: %s", e)
         return None
