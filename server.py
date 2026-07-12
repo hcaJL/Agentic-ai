@@ -120,6 +120,7 @@ def _snapshot(new_entries: list[dict] | None = None) -> dict:
         "feed": GAME["feed"],
         "new_entries": new_entries or [],
         "mock_engine": _engine.mock,
+        "tts_available": config.USE_LLM,
         "flow": _flow,
         "opts": GAME["opts"],
     }
@@ -137,6 +138,14 @@ class NewGameReq(BaseModel):
 
 class MoveReq(BaseModel):
     uci: str
+
+
+class OptsReq(BaseModel):
+    """Live-tunable options; opponent/color still require a new game."""
+    persona: str | None = None
+    tts_on: bool | None = None
+    verbose: bool | None = None
+    depth: int | None = None
 
 
 @app.get("/")
@@ -172,6 +181,15 @@ def new_game(req: NewGameReq):
             if mv:
                 entries = _play_one(mv)
         return _snapshot(entries)
+
+
+@app.post("/api/opts")
+def set_opts(req: OptsReq):
+    with _lock:
+        for k, v in req.model_dump().items():
+            if v is not None:
+                GAME["opts"][k] = v
+        return {"opts": GAME["opts"], "tts_available": config.USE_LLM}
 
 
 @app.post("/api/move")

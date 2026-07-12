@@ -215,16 +215,39 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .piece.fade { transition: opacity .18s; opacity: 0; }
 #board.playable .sq { cursor: pointer; }
 
-/* scoresheet */
+/* scoresheet (collapsible) */
 .scoresheet {
-  padding: 10px 20px; font-size: 13px; color: var(--muted);
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-  font-family: ui-monospace, Consolas, monospace;
-  white-space: nowrap; overflow-x: auto;
-  min-height: 42px;
+  overflow: hidden;
 }
-.scoresheet b { color: var(--text); font-weight: 600; }
-.evaltxt { color: var(--gold); margin-left: 14px; }
+.scorebtn {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 11px 20px; border: none; background: none; cursor: pointer;
+  color: var(--text); font-size: 13px; font-family: inherit;
+  transition: background .15s;
+}
+.scorebtn:hover { background: var(--panel-2); }
+.scorebtn .cnt { color: var(--muted); }
+.scorebtn .evaltxt { color: var(--gold); margin-left: auto;
+                     font-family: ui-monospace, Consolas, monospace; }
+.scorebtn .chev { color: var(--muted); transition: transform .2s; margin-left: 8px; }
+.scoresheet.open .chev { transform: rotate(180deg); }
+.scorelist {
+  display: none; max-height: 260px; overflow-y: auto;
+  padding: 6px 20px 14px; border-top: 1px solid var(--border);
+}
+.scoresheet.open .scorelist { display: block; }
+.scorelist::-webkit-scrollbar { width: 8px; }
+.scorelist::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.scorerow {
+  display: grid; grid-template-columns: 44px 1fr 1fr;
+  padding: 5px 4px; font-size: 13.5px;
+  font-family: ui-monospace, Consolas, monospace;
+  border-radius: 6px;
+}
+.scorerow:nth-child(odd) { background: rgba(255,255,255,.025); }
+.scorerow .n { color: var(--muted); }
+.scorerow b { color: var(--text); font-weight: 600; }
 
 /* ── Feed ───────────────────────────────────────────────── */
 #feedPanel { display: flex; flex-direction: column; max-height: calc(100vh - 140px); }
@@ -345,7 +368,13 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
       </div>
     </div>
 
-    <div class="scoresheet" id="scoresheet">尚未開局</div>
+    <div class="scoresheet" id="scoresheet">
+      <button class="scorebtn" id="scoreBtn">
+        <span>📜 棋譜</span><span class="cnt" id="scoreCnt">尚未開局</span>
+        <span class="evaltxt" id="scoreEval"></span><span class="chev">▾</span>
+      </button>
+      <div class="scorelist" id="scoreList"></div>
+    </div>
   </div>
 
   <!-- ── Live feed ── -->
@@ -511,18 +540,23 @@ function renderMeta() {
     $('#evalWhite').style.height = (50 + cp / 20) * .9 + 5 + '%';
   }
 
-  // scoresheet
+  // scoresheet (collapsible)
   if (S.sans.length) {
+    $('#scoreCnt').textContent = `${S.sans.length} 手`;
+    $('#scoreEval').textContent = S.eval ? `評估 ${(S.eval.score_cp / 100).toFixed(1)}` : '';
     let html = '';
     for (let i = 0; i < S.sans.length; i += 2) {
-      const n = i / 2 + 1;
-      html += `${n}. <b>${S.sans[i]}</b> ${S.sans[i + 1] ? '<b>' + S.sans[i + 1] + '</b>' : ''} `;
+      html += `<div class="scorerow"><span class="n">${i / 2 + 1}.</span>` +
+              `<b>${S.sans[i]}</b><b>${S.sans[i + 1] || ''}</b></div>`;
     }
-    if (S.eval) html += `<span class="evaltxt">評估 ${(S.eval.score_cp / 100).toFixed(1)}</span>`;
-    const sheet = $('#scoresheet');
-    sheet.innerHTML = html;
-    sheet.scrollLeft = sheet.scrollWidth;
-  } else $('#scoresheet').textContent = '尚未開局';
+    const list = $('#scoreList');
+    list.innerHTML = html;
+    list.scrollTop = list.scrollHeight;
+  } else {
+    $('#scoreCnt').textContent = '尚未開局';
+    $('#scoreEval').textContent = '';
+    $('#scoreList').innerHTML = '';
+  }
 
   $('#engineNote').style.display = S.mock_engine ? 'block' : 'none';
   $('#engineNote').textContent =
@@ -648,7 +682,22 @@ function switchInit(id) {
 }
 function switchVal(id) { return $(id).classList.contains('on'); }
 
-pillGroup('#personaPills');
+/* settings apply LIVE — no need to restart the game */
+async function pushOpts() {
+  try {
+    await fetch('/api/opts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        persona: pillVal('#personaPills'),
+        tts_on: switchVal('#swTts'),
+        verbose: switchVal('#swVerbose'),
+        depth: +$('#depth').value,
+      }),
+    });
+  } catch (e) { console.error(e); }
+}
+
+pillGroup('#personaPills', pushOpts);
 pillGroup('#colorPills');
 pillGroup('#oppPills', v => {
   const eng = v === 'engine';
@@ -658,7 +707,26 @@ pillGroup('#oppPills', v => {
   $('#depthField').style.pointerEvents = eng ? 'auto' : 'none';
 });
 switchInit('#swTts'); switchInit('#swVerbose');
+$('#swVerbose').addEventListener('click', pushOpts);
+$('#swTts').addEventListener('click', () => {
+  pushOpts();
+  if (switchVal('#swTts')) {
+    if (S && !S.tts_available) {
+      alert('後端沒有 OPENAI_API_KEY，無法合成語音。請在 .env 設定後重啟伺服器。');
+      return;
+    }
+    // unlock browser audio inside this user gesture
+    try {
+      const a = new Audio('data:audio/mp3;base64,//uQxAAA');
+      a.volume = 0; a.play().catch(() => {});
+    } catch (e) {}
+  }
+});
 $('#depth').addEventListener('input', () => $('#depthVal').textContent = $('#depth').value);
+$('#depth').addEventListener('change', pushOpts);
+
+$('#scoreBtn').addEventListener('click', () =>
+  $('#scoresheet').classList.toggle('open'));
 
 $('#btnNew').addEventListener('click', async () => {
   const vsEngine = pillVal('#oppPills') === 'engine';
