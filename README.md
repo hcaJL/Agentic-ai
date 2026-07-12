@@ -26,16 +26,21 @@
 
 ## 對弈模式（feature/human-play）
 
-自己下棋、讓主播台實況解說你的對局：
+自己下棋、讓主播台實況解說你的對局。**棋訊直播間** Web 版（推薦）：
 
 ```bash
-.venv/bin/streamlit run play.py
+pip install fastapi uvicorn
+uvicorn server:app
+# 開 http://localhost:8000
 ```
 
-- 對手可選 **Stockfish**（側欄可調搜索深度 2–16）或**雙人對弈**
-- 執黑時棋盤自動翻轉，開局按「🤖 讓引擎走棋」
+- 深色直播間介面，點選棋子走棋，走子有滑動動畫、**零閃爍**
+- 對手可選 **Stockfish**（可調搜索深度 2–16）或**雙人對弈**，執黑自動翻轉棋盤
 - 你的每一步與引擎的回應都走同一條 LangGraph 管線：例行步靜默、
-  關鍵步觸發雙主播＋棋理引用＋回扣，TTS 語音照常可開
+  關鍵步觸發雙主播＋棋理引用＋回扣；「每步都播報」可強制解說
+- TTS 語音直接在瀏覽器播放（開側欄「🔊 語音播報」）
+
+（舊版 Streamlit 介面仍在：`streamlit run play.py`）
 
 ## 架構（LangGraph）
 

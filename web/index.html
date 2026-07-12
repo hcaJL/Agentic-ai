@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>棋訊直播間 — Chess Broadcast Studio</title>
+<style>
+:root {
+  --bg:        #0d1017;
+  --panel:     #151a24;
+  --panel-2:   #1a2130;
+  --border:    #262e40;
+  --text:      #e8e6e0;
+  --muted:     #8b93a7;
+  --gold:      #d4a94e;
+  --gold-dim:  #a8863d;
+  --red:       #e05252;
+  --sq-light:  #ecdfc8;
+  --sq-dark:   #ae8a68;
+  --sel:       rgba(246, 246, 105, .55);
+  --lastmv:    rgba(212, 169, 78, .38);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background:
+    radial-gradient(1200px 600px at 70% -10%, #1a2233 0%, transparent 60%),
+    var(--bg);
+  color: var(--text);
+  font-family: "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(13, 16, 23, .8);
+}
+.logo {
+  width: 42px; height: 42px; border-radius: 10px;
+  background: linear-gradient(145deg, #f4ede0, #cfc4ad);
+  display: grid; place-items: center;
+  font-size: 24px; color: #1a1a1a;
+  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+h1 { font-size: 21px; font-weight: 700; letter-spacing: .06em;
+     font-family: "Noto Serif TC", "PMingLiU", serif; }
+.sub { font-size: 10.5px; color: var(--muted); letter-spacing: .32em; margin-top: 2px; }
+.onair {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 18px; border-radius: 24px;
+  border: 1px solid rgba(224, 82, 82, .45);
+  background: rgba(224, 82, 82, .08);
+  color: var(--red); font-size: 11.5px; font-weight: 700; letter-spacing: .28em;
+}
+.onair .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% {opacity:1; box-shadow:0 0 0 0 rgba(224,82,82,.5)}
+                   50% {opacity:.55; box-shadow:0 0 0 6px rgba(224,82,82,0)} }
+
+/* ── Layout ─────────────────────────────────────────────── */
+main {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 360px;
+  gap: 20px;
+  padding: 20px 28px;
+  max-width: 1560px;
+  margin: 0 auto;
+}
+@media (max-width: 1180px) { main { grid-template-columns: 250px minmax(0,1fr); }
+                             #feedPanel { grid-column: 1 / -1; } }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+}
+.panel h2 {
+  font-size: 13px; font-weight: 700; letter-spacing: .1em;
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 18px;
+}
+.panel h2 .en { font-size: 9.5px; color: var(--muted); letter-spacing: .28em; }
+
+/* ── Settings ───────────────────────────────────────────── */
+.field { margin-bottom: 18px; }
+.field label { display: block; font-size: 11.5px; color: var(--muted);
+               margin-bottom: 8px; letter-spacing: .08em; }
+.pills { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill {
+  padding: 7px 15px; border-radius: 20px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2);
+  color: var(--text); font-size: 12.5px;
+  transition: all .15s;
+}
+.pill:hover { border-color: var(--gold-dim); }
+.pill.on {
+  background: var(--gold); border-color: var(--gold);
+  color: #14100a; font-weight: 700;
+}
+.switch { display: flex; align-items: center; justify-content: space-between;
+          font-size: 13px; cursor: pointer; user-select: none; }
+.track {
+  width: 40px; height: 22px; border-radius: 12px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  position: relative; transition: background .2s;
+}
+.track::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--muted); transition: all .2s;
+}
+.switch.on .track { background: var(--gold); border-color: var(--gold); }
+.switch.on .track::after { left: 20px; background: #14100a; }
+input[type=range] {
+  width: 100%; accent-color: var(--gold); cursor: pointer;
+}
+.depthval { color: var(--gold); font-weight: 700; margin-left: 6px; }
+.newgame {
+  width: 100%; padding: 13px; margin-top: 4px;
+  border: none; border-radius: 10px; cursor: pointer;
+  background: linear-gradient(145deg, #e05252, #c23c3c);
+  color: #fff; font-size: 15px; font-weight: 700; letter-spacing: .3em;
+  font-family: inherit;
+  box-shadow: 0 4px 16px rgba(224, 82, 82, .25);
+  transition: transform .12s, box-shadow .12s;
+}
+.newgame:hover { transform: translateY(-1px);
+                 box-shadow: 0 6px 20px rgba(224, 82, 82, .35); }
+.note {
+  margin-top: 16px; padding: 11px 13px; border-radius: 9px;
+  font-size: 11.5px; line-height: 1.6; color: #c9a86a;
+  background: rgba(212, 169, 78, .07);
+  border: 1px solid rgba(212, 169, 78, .22);
+}
+hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+
+/* ── Center: status + board ─────────────────────────────── */
+#center { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.statusbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 20px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; font-size: 14.5px;
+}
+.statusbar .tag { margin-left: auto; font-size: 10px; letter-spacing: .3em;
+                  color: var(--muted); }
+.statusbar.thinking .tag { color: var(--gold); }
+#stTurnDot { width: 13px; height: 13px; border-radius: 50%;
+             border: 2px solid var(--muted); background: #fff; flex: none; }
+#stTurnDot.black { background: #1a1a1a; }
+
+.arena { display: flex; gap: 14px; align-items: stretch; justify-content: center; }
+
+/* eval bar */
+.evalbar {
+  width: 14px; border-radius: 7px; overflow: hidden;
+  background: #23180f; border: 1px solid var(--border);
+  display: flex; flex-direction: column; flex: none;
+}
+#evalWhite {
+  margin-top: auto; width: 100%;
+  background: linear-gradient(180deg, #fdfaf3, #d8d2c2);
+  height: 50%;
+  transition: height .6s cubic-bezier(.4, 0, .2, 1);
+}
+
+/* board */
+.boardwrap {
+  position: relative;
+  width: min(660px, calc(100vh - 220px), 100%);
+  aspect-ratio: 1;
+  border-radius: 10px;
+  padding: 10px;
+  background: linear-gradient(145deg, #3a2c1e, #241a10);
+  box-shadow: 0 10px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+  flex: none;
+}
+#board {
+  position: relative; width: 100%; height: 100%;
+  border-radius: 5px; overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.35);
+}
+.sq { position: absolute; width: 12.5%; height: 12.5%; }
+.sq.light { background: var(--sq-light); }
+.sq.dark  { background: var(--sq-dark); }
+.sq .tint { position: absolute; inset: 0; opacity: 0; transition: opacity .15s; }
+.sq.lastmv .tint { background: var(--lastmv); opacity: 1; }
+.sq.sel    .tint { background: var(--sel);    opacity: 1; }
+.sq.checked .tint {
+  background: radial-gradient(circle, rgba(224,60,60,.75) 15%, rgba(224,60,60,0) 75%);
+  opacity: 1;
+}
+.sq .hint { position: absolute; inset: 0; display: none; pointer-events: none; }
+.sq.dot .hint { display: block;
+  background: radial-gradient(circle, rgba(20,16,10,.32) 0 27%, transparent 29%); }
+.sq.ring .hint { display: block;
+  background: radial-gradient(circle, transparent 0 60%, rgba(20,16,10,.32) 62% 88%, transparent 90%); }
+.sq.dot:hover .hint, .sq.ring:hover .hint { filter: brightness(1.6); }
+
+.piece {
+  position: absolute; width: 12.5%; height: 12.5%;
+  pointer-events: none; z-index: 3;
+  transition: transform .22s cubic-bezier(.3, .9, .4, 1);
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,.35));
+}
+.piece svg { width: 100%; height: 100%; display: block; }
+.piece.fade { transition: opacity .18s; opacity: 0; }
+#board.playable .sq { cursor: pointer; }
+
+/* scoresheet */
+.scoresheet {
+  padding: 10px 20px; font-size: 13px; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+  white-space: nowrap; overflow-x: auto;
+  min-height: 42px;
+}
+.scoresheet b { color: var(--text); font-weight: 600; }
+.evaltxt { color: var(--gold); margin-left: 14px; }
+
+/* ── Feed ───────────────────────────────────────────────── */
+#feedPanel { display: flex; flex-direction: column; max-height: calc(100vh - 140px); }
+#feed { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 9px;
+        padding-right: 4px; }
+#feed::-webkit-scrollbar { width: 8px; }
+#feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.card {
+  border-left: 3px solid var(--muted);
+  background: var(--panel-2);
+  border-radius: 0 9px 9px 0;
+  padding: 10px 14px;
+  animation: slidein .25s ease;
+}
+@keyframes slidein { from { opacity: 0; transform: translateY(-6px); } }
+.card .who { font-size: 10px; font-weight: 700; letter-spacing: .12em;
+             margin-bottom: 5px; display: flex; align-items: center; gap: 8px; }
+.card .txt { font-size: 13.5px; line-height: 1.65; }
+.card.critical { border-color: #ef4444; } .card.critical .who { color: #ef4444; }
+.card.notable  { border-color: #f0b429; } .card.notable  .who { color: #f0b429; }
+.card.routine  { border-color: #6b7280; } .card.routine  .who { color: #9aa3b2; }
+.card .playbtn {
+  margin-left: auto; cursor: pointer; border: none; background: none;
+  color: var(--muted); font-size: 13px; padding: 0 2px;
+}
+.card .playbtn:hover { color: var(--gold); }
+.mutedline { font-size: 11.5px; color: #5d6577; padding: 2px 6px;
+             font-family: ui-monospace, Consolas, monospace; }
+.feedempty { color: var(--muted); font-size: 13px; text-align: center;
+             margin-top: 40px; line-height: 1.8; }
+
+/* game-over veil */
+#veil {
+  position: absolute; inset: 0; z-index: 10; display: none;
+  place-items: center; border-radius: 5px;
+  background: rgba(10, 12, 18, .72); backdrop-filter: blur(2px);
+}
+#veil.show { display: grid; }
+#veil .box { text-align: center; }
+#veil .r { font-size: 34px; font-weight: 800; letter-spacing: .1em;
+           color: var(--gold); font-family: "Noto Serif TC", serif; }
+#veil .d { color: var(--muted); margin-top: 8px; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">♞</div>
+  <div>
+    <h1>棋訊直播間</h1>
+    <div class="sub">CHESS BROADCAST STUDIO</div>
+  </div>
+  <div class="onair"><span class="dot"></span>ON AIR</div>
+</header>
+
+<main>
+  <!-- ── Settings ── -->
+  <div class="panel" id="settings">
+    <h2>對弈設定 <span class="en">SETUP</span></h2>
+
+    <div class="field">
+      <label>主播風格</label>
+      <div class="pills" id="personaPills">
+        <div class="pill on" data-v="calm">沉穩</div>
+        <div class="pill" data-v="excited">熱血</div>
+        <div class="pill" data-v="literary">文藝</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="switch" id="swTts"><span>🔊 語音播報</span><div class="track"></div></div>
+    </div>
+    <div class="field">
+      <div class="switch" id="swVerbose"><span>每步都播報</span><div class="track"></div></div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="field">
+      <label>對手</label>
+      <div class="pills" id="oppPills">
+        <div class="pill on" data-v="engine">引擎</div>
+        <div class="pill" data-v="human">雙人對弈</div>
+      </div>
+    </div>
+
+    <div class="field" id="colorField">
+      <label>你執</label>
+      <div class="pills" id="colorPills">
+        <div class="pill on" data-v="white">白方</div>
+        <div class="pill" data-v="black">黑方</div>
+      </div>
+    </div>
+
+    <div class="field" id="depthField">
+      <label>引擎深度<span class="depthval" id="depthVal">8</span></label>
+      <input type="range" id="depth" min="2" max="16" value="8">
+    </div>
+
+    <button class="newgame" id="btnNew">開 新 對 局</button>
+    <div class="note" id="engineNote" style="display:none"></div>
+  </div>
+
+  <!-- ── Board ── -->
+  <div id="center">
+    <div class="statusbar" id="statusbar">
+      <div id="stTurnDot"></div>
+      <span id="stText">載入中…</span>
+      <span class="tag" id="stTag">READY</span>
+    </div>
+
+    <div class="arena">
+      <div class="evalbar"><div id="evalWhite"></div></div>
+      <div class="boardwrap">
+        <div id="board">
+          <div id="veil"><div class="box"><div class="r" id="veilR"></div><div class="d" id="veilD"></div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="scoresheet" id="scoresheet">尚未開局</div>
+  </div>
+
+  <!-- ── Live feed ── -->
+  <div class="panel" id="feedPanel">
+    <h2>📡 即時播報 <span class="en">LIVE FEED</span></h2>
+    <div id="feed"><div class="feedempty">開局後，主播與分析師<br>將在這裡即時解說。</div></div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const FILES = 'abcdefgh';
+const SPEAKER_NAME = { play_by_play: '主播', analyst: '分析師' };
+
+let PIECES = {};          // symbol -> svg string
+let S = null;             // latest server snapshot
+let sel = null;           // selected square name e.g. 'e2'
+let orientation = 'white';
+let busy = false;
+let sqEls = {}, pieceEls = {};   // square name -> element
+
+/* ── helpers ── */
+function sqName(f, r) { return FILES[f] + (r + 1); }
+function sqXY(name) {           // board-relative % offsets by orientation
+  const f = FILES.indexOf(name[0]), r = +name[1] - 1;
+  const x = orientation === 'white' ? f : 7 - f;
+  const y = orientation === 'white' ? 7 - r : r;
+  return [x, y];
+}
+function parseFen(fen) {
+  const out = {};
+  fen.split(' ')[0].split('/').forEach((row, ri) => {
+    let fi = 0;
+    for (const c of row) {
+      if (c >= '1' && c <= '8') fi += +c;
+      else { out[sqName(fi, 7 - ri)] = c; fi++; }
+    }
+  });
+  return out;
+}
+
+/* ── build the 64 squares once ── */
+function buildBoard() {
+  const bd = $('#board');
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const name = sqName(f, r);
+    const el = document.createElement('div');
+    el.className = 'sq ' + ((f + r) % 2 ? 'light' : 'dark');
+    el.dataset.sq = name;
+    el.innerHTML = '<div class="tint"></div><div class="hint"></div>';
+    el.addEventListener('click', () => onSquareClick(name));
+    bd.appendChild(el);
+    sqEls[name] = el;
+  }
+  placeSquares();
+}
+function placeSquares() {
+  for (const [name, el] of Object.entries(sqEls)) {
+    const [x, y] = sqXY(name);
+    el.style.left = x * 12.5 + '%';
+    el.style.top = y * 12.5 + '%';
+  }
+  for (const [name, el] of Object.entries(pieceEls)) setPiecePos(el, name);
+}
+function setPiecePos(el, name) {
+  const [x, y] = sqXY(name);
+  el.style.transform = `translate(${x * 100}%, ${y * 100}%)`;
+}
+
+/* ── piece layer: diff + animate, never reload the page ── */
+function syncPieces(fen) {
+  const want = parseFen(fen);
+  const removed = [], added = [];
+  for (const [sq, el] of Object.entries(pieceEls))
+    if (want[sq] !== el.dataset.sym) removed.push(sq);
+  for (const [sq, sym] of Object.entries(want))
+    if (!pieceEls[sq] || pieceEls[sq].dataset.sym !== sym) added.push(sq);
+
+  // pair removed→added with the same symbol → slide animation
+  for (const to of [...added]) {
+    const sym = want[to];
+    const fromIdx = removed.findIndex(sq => pieceEls[sq]?.dataset.sym === sym);
+    if (fromIdx === -1) continue;
+    const from = removed[fromIdx];
+    removed.splice(fromIdx, 1);
+    added.splice(added.indexOf(to), 1);
+    const el = pieceEls[from];
+    delete pieceEls[from];
+    // capture: fade out the occupant first
+    if (pieceEls[to]) { fadeOut(pieceEls[to]); delete pieceEls[to]; }
+    pieceEls[to] = el;
+    el.dataset.sq = to;
+    setPiecePos(el, to);
+  }
+  for (const sq of removed) { fadeOut(pieceEls[sq]); delete pieceEls[sq]; }
+  for (const sq of added) {
+    const el = document.createElement('div');
+    el.className = 'piece';
+    el.dataset.sym = want[sq]; el.dataset.sq = sq;
+    el.innerHTML = PIECES[want[sq]] || '';
+    setPiecePos(el, sq);
+    $('#board').appendChild(el);
+    pieceEls[sq] = el;
+  }
+}
+function fadeOut(el) { el.classList.add('fade'); setTimeout(() => el.remove(), 200); }
+
+/* ── highlights ── */
+function paint() {
+  const last = S?.last_move;
+  const lastSqs = last ? [last.slice(0, 2), last.slice(2, 4)] : [];
+  const dests = new Set(), caps = new Set();
+  if (sel && S) {
+    const pos = parseFen(S.fen);
+    for (const m of S.legal_moves)
+      if (m.slice(0, 2) === sel) {
+        const to = m.slice(2, 4);
+        dests.add(to);
+        if (pos[to]) caps.add(to);
+      }
+  }
+  let checkedSq = null;
+  if (S?.is_check) {
+    const pos = parseFen(S.fen);
+    const k = S.turn === 'white' ? 'K' : 'k';
+    checkedSq = Object.keys(pos).find(sq => pos[sq] === k);
+  }
+  for (const [name, el] of Object.entries(sqEls)) {
+    el.classList.toggle('sel', name === sel);
+    el.classList.toggle('lastmv', lastSqs.includes(name) && name !== sel);
+    el.classList.toggle('dot', dests.has(name) && !caps.has(name));
+    el.classList.toggle('ring', caps.has(name));
+    el.classList.toggle('checked', name === checkedSq);
+  }
+}
+
+/* ── status / eval / scoresheet / feed ── */
+function renderMeta() {
+  const dot = $('#stTurnDot'), txt = $('#stText'), tag = $('#stTag'),
+        bar = $('#statusbar');
+  dot.classList.toggle('black', S.turn === 'black');
+  bar.classList.toggle('thinking', busy);
+  if (S.game_over) {
+    txt.textContent = `對局結束 ${S.result}` + (S.is_checkmate ? '（將殺）' : '');
+    tag.textContent = 'FINISHED';
+    $('#veilR').textContent = S.result;
+    $('#veilD').textContent = S.is_checkmate ? '將殺' : '對局結束';
+    $('#veil').classList.add('show');
+  } else {
+    $('#veil').classList.remove('show');
+    if (busy) { txt.textContent = '引擎思考中…'; tag.textContent = 'THINKING'; }
+    else {
+      txt.textContent = (S.turn === 'white' ? '白方回合' : '黑方回合')
+        + (S.is_check ? '＊將軍＊' : '') + ' — 點選棋子';
+      tag.textContent = 'READY';
+    }
+  }
+  $('#board').classList.toggle('playable', !busy && !S.game_over && !S.engine_to_move);
+
+  // eval bar + text (white POV)
+  if (S.eval) {
+    const cp = Math.max(-1000, Math.min(1000, S.eval.score_cp));
+    $('#evalWhite').style.height = (50 + cp / 20) * .9 + 5 + '%';
+  }
+
+  // scoresheet
+  if (S.sans.length) {
+    let html = '';
+    for (let i = 0; i < S.sans.length; i += 2) {
+      const n = i / 2 + 1;
+      html += `${n}. <b>${S.sans[i]}</b> ${S.sans[i + 1] ? '<b>' + S.sans[i + 1] + '</b>' : ''} `;
+    }
+    if (S.eval) html += `<span class="evaltxt">評估 ${(S.eval.score_cp / 100).toFixed(1)}</span>`;
+    const sheet = $('#scoresheet');
+    sheet.innerHTML = html;
+    sheet.scrollLeft = sheet.scrollWidth;
+  } else $('#scoresheet').textContent = '尚未開局';
+
+  $('#engineNote').style.display = S.mock_engine ? 'block' : 'none';
+  $('#engineNote').textContent =
+    'MOCK 引擎：評估恆為 0，所有步都是例行步。開「每步都播報」強制解說，或設定 STOCKFISH_PATH。';
+}
+
+function addFeedEntries(entries) {
+  const feed = $('#feed');
+  const empty = feed.querySelector('.feedempty');
+  if (empty && entries.length) empty.remove();
+  const clips = [];
+  for (const e of entries) {
+    let el;
+    if (!e.speaker) {
+      el = document.createElement('div');
+      el.className = 'mutedline';
+      el.textContent = `· ${e.text}（例行，靜默）`;
+    } else {
+      el = document.createElement('div');
+      el.className = 'card ' + e.severity;
+      const name = SPEAKER_NAME[e.speaker] || e.speaker;
+      el.innerHTML =
+        `<div class="who">${name} · ${e.route.toUpperCase()}` +
+        (e.audio ? `<button class="playbtn" title="重播語音">▶</button>` : '') +
+        `</div><div class="txt"></div>`;
+      el.querySelector('.txt').textContent = e.text;
+      if (e.audio) {
+        clips.push(e.audio);
+        el.querySelector('.playbtn').onclick = () => playB64(e.audio);
+      }
+    }
+    feed.prepend(el);
+  }
+  if (clips.length) playQueue(clips);
+}
+let audioEl = null;
+function playB64(b64) {
+  if (audioEl) audioEl.pause();
+  audioEl = new Audio('data:audio/mp3;base64,' + b64);
+  audioEl.play().catch(() => {});
+}
+function playQueue(clips) {
+  if (audioEl) audioEl.pause();
+  let i = 0;
+  const next = () => {
+    if (i >= clips.length) return;
+    audioEl = new Audio('data:audio/mp3;base64,' + clips[i++]);
+    audioEl.onended = next;
+    audioEl.play().catch(() => {});
+  };
+  next();
+}
+
+/* ── interactions ── */
+function canSelect(sq) {
+  if (!S || busy || S.game_over || S.engine_to_move) return false;
+  return S.legal_moves.some(m => m.slice(0, 2) === sq);
+}
+function onSquareClick(sq) {
+  if (!S || busy || S.game_over || S.engine_to_move) return;
+  if (!sel) {
+    if (canSelect(sq)) { sel = sq; paint(); }
+    return;
+  }
+  const legal = S.legal_moves.find(m => m.slice(0, 4) === sel + sq);
+  if (legal) { sendMove(legal); return; }
+  sel = (canSelect(sq) && sq !== sel) ? sq : null;
+  paint();
+}
+async function sendMove(uci) {
+  // optimistic local animation of the human move
+  const fenNow = parseFen(S.fen);
+  const from = uci.slice(0, 2), to = uci.slice(2, 4);
+  sel = null;
+  const el = pieceEls[from];
+  if (el) {
+    if (pieceEls[to]) { fadeOut(pieceEls[to]); delete pieceEls[to]; }
+    delete pieceEls[from];
+    pieceEls[to] = el;
+    setPiecePos(el, to);
+  }
+  busy = true; renderMeta(); paint();
+  try {
+    const r = await fetch('/api/move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uci }),
+    });
+    const data = await r.json();
+    if (data.error) { await refresh(); busy = false; renderMeta(); return; }
+    applySnapshot(data);
+  } catch (e) { console.error(e); }
+  busy = false; renderMeta(); paint();
+}
+
+function applySnapshot(data) {
+  S = data;
+  syncPieces(S.fen);
+  paint();
+  renderMeta();
+  addFeedEntries(S.new_entries || []);
+}
+
+async function refresh() {
+  const r = await fetch('/api/state');
+  S = await r.json();
+  syncPieces(S.fen); paint(); renderMeta();
+}
+
+/* ── settings ── */
+function pillGroup(id, cb) {
+  const g = $(id);
+  g.addEventListener('click', e => {
+    const p = e.target.closest('.pill');
+    if (!p) return;
+    g.querySelectorAll('.pill').forEach(x => x.classList.remove('on'));
+    p.classList.add('on');
+    cb && cb(p.dataset.v);
+  });
+}
+function pillVal(id) { return $(id + ' .pill.on').dataset.v; }
+function switchInit(id) {
+  $(id).addEventListener('click', () => $(id).classList.toggle('on'));
+}
+function switchVal(id) { return $(id).classList.contains('on'); }
+
+pillGroup('#personaPills');
+pillGroup('#colorPills');
+pillGroup('#oppPills', v => {
+  const eng = v === 'engine';
+  $('#colorField').style.opacity = eng ? 1 : .35;
+  $('#depthField').style.opacity = eng ? 1 : .35;
+  $('#colorField').style.pointerEvents = eng ? 'auto' : 'none';
+  $('#depthField').style.pointerEvents = eng ? 'auto' : 'none';
+});
+switchInit('#swTts'); switchInit('#swVerbose');
+$('#depth').addEventListener('input', () => $('#depthVal').textContent = $('#depth').value);
+
+$('#btnNew').addEventListener('click', async () => {
+  const vsEngine = pillVal('#oppPills') === 'engine';
+  const humanWhite = pillVal('#colorPills') === 'white';
+  orientation = (!vsEngine || humanWhite) ? 'white' : 'black';
+  placeSquares();
+  sel = null;
+  $('#feed').innerHTML = '<div class="feedempty">開局後，主播與分析師<br>將在這裡即時解說。</div>';
+  busy = true; renderMeta?.call?.(null);
+  const r = await fetch('/api/new', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      vs_engine: vsEngine,
+      human_is_white: humanWhite,
+      depth: +$('#depth').value,
+      persona: pillVal('#personaPills'),
+      tts_on: switchVal('#swTts'),
+      verbose: switchVal('#swVerbose'),
+    }),
+  });
+  busy = false;
+  applySnapshot(await r.json());
+});
+
+/* ── boot ── */
+(async function boot() {
+  PIECES = await (await fetch('/api/pieces')).json();
+  buildBoard();
+  await refresh();
+})();
+</script>
+</body>
+</html>

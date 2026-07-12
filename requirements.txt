@@ -3,6 +3,10 @@ python-chess>=1.11,<2.0
 streamlit>=1.30
 python-dotenv>=1.0
 
+# Play mode web UI (server.py + web/)
+fastapi>=0.110
+uvicorn>=0.29
+
 # Graduate to LangGraph (M2+)
 langgraph>=0.2
 langchain>=0.3
