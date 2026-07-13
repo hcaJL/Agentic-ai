@@ -177,20 +177,42 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   position: relative;
   width: min(660px, calc(100vh - 220px), 100%);
   aspect-ratio: 1;
-  border-radius: 10px;
-  padding: 10px;
-  background: linear-gradient(145deg, #3a2c1e, #241a10);
-  box-shadow: 0 10px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);
+  border-radius: 12px;
+  padding: 14px;
+  background:
+    linear-gradient(160deg, #4d3a26 0%, #35281a 35%, #241a10 100%);
+  box-shadow:
+    0 14px 48px rgba(0,0,0,.55),
+    inset 0 1px 0 rgba(255,255,255,.08),
+    inset 0 -1px 0 rgba(0,0,0,.4);
   flex: none;
+}
+/* thin golden trim ring in the frame */
+.boardwrap::before {
+  content: ''; position: absolute; inset: 9px;
+  border: 1px solid rgba(212, 169, 78, .32);
+  border-radius: 8px; pointer-events: none;
 }
 #board {
   position: relative; width: 100%; height: 100%;
-  border-radius: 5px; overflow: hidden;
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,.35);
+  border-radius: 4px; overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.45);
+}
+/* glossy sheen + vignette above the squares */
+#board::after {
+  content: ''; position: absolute; inset: 0; z-index: 4;
+  pointer-events: none;
+  background:
+    linear-gradient(118deg, rgba(255,255,255,.075) 0%, rgba(255,255,255,.02) 28%, transparent 45%),
+    radial-gradient(140% 140% at 50% 45%, transparent 62%, rgba(20, 12, 4, .18) 100%);
 }
 .sq { position: absolute; width: 12.5%; height: 12.5%; }
-.sq.light { background: var(--sq-light); }
-.sq.dark  { background: var(--sq-dark); }
+.sq.light { background: linear-gradient(135deg, #f2e3c6 0%, #e9d6af 100%); }
+.sq.dark  { background: linear-gradient(135deg, #b3875f 0%, #9e7148 100%); }
+/* hover on a selectable piece's square */
+#board.playable .sq.canpick:hover .tint {
+  background: rgba(246, 240, 150, .28); opacity: 1;
+}
 .sq .tint { position: absolute; inset: 0; opacity: 0; transition: opacity .15s; }
 .sq.lastmv .tint { background: var(--lastmv); opacity: 1; }
 .sq.sel    .tint { background: var(--sel);    opacity: 1; }
@@ -198,20 +220,27 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   background: radial-gradient(circle, rgba(224,60,60,.75) 15%, rgba(224,60,60,0) 75%);
   opacity: 1;
 }
-.sq .hint { position: absolute; inset: 0; display: none; pointer-events: none; }
+.sq .hint { position: absolute; inset: 0; display: none; pointer-events: none; z-index: 2; }
 .sq.dot .hint { display: block;
-  background: radial-gradient(circle, rgba(20,16,10,.32) 0 27%, transparent 29%); }
+  background: radial-gradient(circle, rgba(45,30,10,.34) 0 26%, transparent 28%); }
 .sq.ring .hint { display: block;
-  background: radial-gradient(circle, transparent 0 60%, rgba(20,16,10,.32) 62% 88%, transparent 90%); }
-.sq.dot:hover .hint, .sq.ring:hover .hint { filter: brightness(1.6); }
+  background: radial-gradient(circle, transparent 0 61%, rgba(45,30,10,.36) 63% 88%, transparent 90%); }
+.sq.dot:hover .hint, .sq.ring:hover .hint { filter: brightness(1.7); }
 
 .piece {
   position: absolute; width: 12.5%; height: 12.5%;
   pointer-events: none; z-index: 3;
   transition: transform .22s cubic-bezier(.3, .9, .4, 1);
-  filter: drop-shadow(0 2px 3px rgba(0,0,0,.35));
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .38));
 }
-.piece svg { width: 100%; height: 100%; display: block; }
+.piece svg {
+  width: 100%; height: 100%; display: block;
+  transition: transform .16s ease;
+  transform-origin: 50% 62%;
+}
+/* picked-up piece: slight lift */
+.piece.picked { filter: drop-shadow(0 7px 9px rgba(0, 0, 0, .45)); z-index: 5; }
+.piece.picked svg { transform: scale(1.08) translateY(-2%); }
 .piece.fade { transition: opacity .18s; opacity: 0; }
 #board.playable .sq { cursor: pointer; }
 
@@ -502,13 +531,21 @@ function paint() {
     const k = S.turn === 'white' ? 'K' : 'k';
     checkedSq = Object.keys(pos).find(sq => pos[sq] === k);
   }
+  // squares whose piece can be picked up right now
+  const pickable = new Set();
+  if (S && !busy && !S.game_over && !S.engine_to_move)
+    for (const m of S.legal_moves) pickable.add(m.slice(0, 2));
+
   for (const [name, el] of Object.entries(sqEls)) {
     el.classList.toggle('sel', name === sel);
     el.classList.toggle('lastmv', lastSqs.includes(name) && name !== sel);
     el.classList.toggle('dot', dests.has(name) && !caps.has(name));
     el.classList.toggle('ring', caps.has(name));
     el.classList.toggle('checked', name === checkedSq);
+    el.classList.toggle('canpick', pickable.has(name));
   }
+  for (const [name, el] of Object.entries(pieceEls))
+    el.classList.toggle('picked', name === sel);
 }
 
 /* ── status / eval / scoresheet / feed ── */
