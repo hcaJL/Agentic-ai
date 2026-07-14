@@ -122,6 +122,8 @@ _jobs: queue.Queue = queue.Queue()
 
 
 def _fresh_pipe_state() -> dict:
+    # NOTE: keys must exist in graph.state.BroadcastState — LangGraph only
+    # carries declared channels, undeclared keys are dropped by _step()
     return {"board": chess.Board(), "move_history": [], "said_so_far": []}
 
 
@@ -141,45 +143,49 @@ def _speak(text: str, speaker: str, intensity: float, opts: dict):
 
 def _worker():
     pipe = _fresh_pipe_state()
-    while True:
-        kind, gid, payload = _jobs.get()
-        if gid != GAME["id"]:
-            continue                          # stale job from a previous game
+    chat_log: list[dict] = []     # broadcast-session memory, NOT pipeline state
+    chatting = False              # a chatter session is in progress
+
+    def handle(kind: str, gid: int, payload):
+        nonlocal pipe, chat_log, chatting
 
         if kind == "reset":
             pipe = _fresh_pipe_state()
-            continue
+            chat_log, chatting = [], False
+            return
 
         opts = GAME["opts"]
 
         if kind == "filler":
             if not _jobs.empty() or not pipe["move_history"]:
-                continue                      # real work pending / nothing to chat about
-            turns = generate_filler(pipe, opts["persona"])
+                return                        # real work pending / nothing to chat about
+            turns = generate_filler(pipe, opts["persona"], chat_log)
             for t in turns:
                 if gid != GAME["id"]:
-                    break
+                    return
                 audio = _speak(t["text"], t["speaker"], 0.25, opts)
                 _emit({"severity": "filler", "route": "filler",
                        "speaker": t["speaker"], "text": t["text"],
                        "audio": audio, "flush": False})
-            continue
+                chat_log.append(t)
+            del chat_log[:-16]
+            chatting = bool(turns)
+            return
 
         # kind == "move": run the full pipeline on the worker's own board
         mv = chess.Move.from_uci(payload)
         pipe["last_move"] = mv
         pipe["persona"] = opts["persona"]
         # behind schedule? skip generation for this move, keep state coherent
-        if not _jobs.empty():
-            pipe["skip_generation"] = True
+        pipe["skip_generation"] = not _jobs.empty()
         try:
             pipe = _step(pipe)
-        except Exception as e:
+        except Exception:
             import logging
-            logging.exception("pipeline failed: %s", e)
+            logging.exception("pipeline failed for %s", payload)
             pipe["board"].push(mv)            # keep the worker board in sync
             pipe.setdefault("move_history", []).append(mv)
-            continue
+            return
         pipe["move_history"].append(mv)
 
         ev = pipe["event"]
@@ -189,24 +195,43 @@ def _worker():
                  "phase": ev["phase"], "san": a["played_san"]})
 
         commentary = pipe["commentary"]
-        if not commentary and opts["verbose"] and _jobs.empty():
+        label = ev["severity_label"]
+
+        # routine move while the pair is mid-chat: don't butt in with a bare
+        # SAN line — let the conversation flow (next chat batch sees the move)
+        if not commentary and opts["verbose"] and _jobs.empty() and not chatting:
             commentary = [{"speaker": "play_by_play", "text": a["played_san"]}]
 
         if not commentary:
-            _emit({"severity": ev["severity_label"], "route": pipe["route"],
+            _emit({"severity": label, "route": pipe["route"],
                    "speaker": None, "text": a["played_san"],
                    "audio": None, "flush": False})
-            continue
+            return
 
+        # real commentary ends the chatter session (notable queues politely,
+        # critical barges in and cuts the audio)
+        chatting = False
         intensity = pipe.get("register_intensity", 0.2)
-        flush = ev["severity_label"] == "critical"   # barge in on old audio
+        flush = label == "critical"
         for i, turn in enumerate(commentary):
             if gid != GAME["id"]:
-                break
+                return
             audio = _speak(turn["text"], turn["speaker"], intensity, opts)
-            _emit({"severity": ev["severity_label"], "route": pipe["route"],
+            _emit({"severity": label, "route": pipe["route"],
                    "speaker": turn["speaker"], "text": turn["text"],
                    "audio": audio, "flush": flush and i == 0})
+            chat_log.append(turn)             # chat continues from what was said
+        del chat_log[:-16]
+
+    while True:
+        kind, gid, payload = _jobs.get()
+        if gid != GAME["id"]:
+            continue                          # stale job from a previous game
+        try:
+            handle(kind, gid, payload)
+        except Exception:
+            import logging
+            logging.exception("worker job %s failed", kind)  # never kill the thread
 
 
 threading.Thread(target=_worker, daemon=True).start()

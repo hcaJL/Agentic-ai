@@ -641,9 +641,9 @@ function renderMeta() {
 /* ── audio queue: utterances play in order; flush = barge-in ── */
 const AudioQ = {
   q: [], cur: null, lastEnd: Date.now(),
-  enqueue(b64, flush) {
+  enqueue(b64, flush, isFiller) {
     if (flush) this.flush();
-    this.q.push(b64);
+    this.q.push({ b64, filler: !!isFiller });
     this.pump();
   },
   flush() {
@@ -652,16 +652,20 @@ const AudioQ = {
   },
   pump() {
     if (this.cur || !this.q.length) return;
-    const a = new Audio('data:audio/mp3;base64,' + this.q.shift());
+    const item = this.q.shift();
+    const a = new Audio('data:audio/mp3;base64,' + item.b64);
     this.cur = a;
     const done = () => { this.cur = null; this.lastEnd = Date.now(); this.pump(); };
     a.onended = done; a.onerror = done;
     a.play().catch(done);
+    // keep the conversation flowing: while the LAST queued chatter clip is
+    // playing, ask for the next batch so it arrives before the silence
+    if (item.filler && this.q.length === 0) requestFiller('continue');
   },
   idleMs() { return (this.cur || this.q.length) ? 0 : Date.now() - this.lastEnd; },
 };
 
-function playB64(b64) { AudioQ.enqueue(b64, true); }
+function playB64(b64) { AudioQ.enqueue(b64, true, false); }
 
 function addFeedEntry(e, live) {
   const feed = $('#feed');
@@ -685,7 +689,7 @@ function addFeedEntry(e, live) {
     el.querySelector('.txt').textContent = e.text;
     if (e.audio) {
       el.querySelector('.playbtn').onclick = () => playB64(e.audio);
-      if (live) AudioQ.enqueue(e.audio, !!e.flush);
+      if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity === 'filler');
     }
   }
   feed.prepend(el);
@@ -720,14 +724,20 @@ function renderEval() {
     $('#scoreEval').textContent = `評估 ${(EVAL.score_cp / 100).toFixed(1)}`;
 }
 
-/* ── dead-air detection → filler chat (Phase C) ── */
+/* ── dead-air detection → filler chat (Phase C) ──
+   'idle': 5s of true silence starts a chat session.
+   'continue': requested while the last chatter clip still plays, so the
+   next batch arrives seamlessly and the conversation keeps flowing. */
 let lastFillerReq = 0;
-setInterval(() => {
+function requestFiller(mode) {
   if (!S || !S.sans || !S.sans.length || S.game_over || busy) return;
-  if (AudioQ.idleMs() < 5000) return;
-  if (Date.now() - lastFillerReq < 25000) return;
+  const cooldown = mode === 'continue' ? 4000 : 12000;
+  if (Date.now() - lastFillerReq < cooldown) return;
   lastFillerReq = Date.now();
   fetch('/api/filler', { method: 'POST' }).catch(() => {});
+}
+setInterval(() => {
+  if (AudioQ.idleMs() >= 5000) requestFiller('idle');
 }, 1000);
 
 /* ── interactions ── */

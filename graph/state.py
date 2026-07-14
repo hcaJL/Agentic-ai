@@ -50,3 +50,4 @@ class BroadcastState(TypedDict, total=False):
     _material: int
     _prev_phase: str
     _light_streak: int
+    skip_generation: bool       # async worker: catch up without LLM/TTS this move

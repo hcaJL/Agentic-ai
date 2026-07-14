@@ -142,10 +142,11 @@ def _dialogue_generate(facts: dict, n_turns: str = "3-5") -> list[dict]:
     return out
 
 
-def generate_filler(state: dict, persona: str) -> list[dict]:
-    """Phase C: dead-air chatter. 1-2 short conversational turns about the
-    current position — call-backs, likely continuations, light observations.
-    Returns [] when no LLM is available or generation fails."""
+def generate_filler(state: dict, persona: str,
+                    chat_history: list[dict] | None = None) -> list[dict]:
+    """Phase C: dead-air chatter — an ongoing conversation, not one-shot rounds.
+    chat_history carries what was already said so the pair keeps the thread
+    going instead of repeating themselves. Returns [] when no LLM / failure."""
     if not config.USE_LLM:
         return []
     import json as _json
@@ -168,13 +169,24 @@ def generate_filler(state: dict, persona: str) -> list[dict]:
         "likely_next": [t.get("san") for t in (a.get("top_moves") or [])[:3]],
         "callbacks": (mem.get("callbacks") or state.get("said_so_far", []))[-3:],
     }
-    llm = ChatOpenAI(model=config.LIGHT_MODEL, max_tokens=220)
+    history = ""
+    if chat_history:
+        lines = "\n".join(f"{t['speaker']}: {t['text']}" for t in chat_history[-8:])
+        history = (
+            "你們剛才已經聊了這些（接著這段對話聊下去，"
+            "不要重複已講過的觀點；可以深入同一話題，也可以自然換新角度）：\n"
+            f"{lines}\n"
+        )
+    llm = ChatOpenAI(model=config.LIGHT_MODEL, max_tokens=260)
     sys = persona_prompt(persona, 0.25)
     msg = (
         f"{sys}\n"
-        "現在棋局暫時沒有新動作，你們兩位播報員要自然地填補空檔，像轉播空檔的閒聊：\n"
-        "可以聊：局面到目前的走向、回扣先前的關鍵時刻、猜接下來可能的著法、輕鬆的觀察。\n"
-        "規則：1-2 句，兩人一來一往或單人一句；每句短（15-40字）、語氣放鬆；"
+        "棋局暫時沒有新動作，你們兩位播報員在轉播空檔自然閒聊，"
+        "像平常聊天一樣有來有往。\n"
+        f"{history}"
+        "話題方向（挑還沒聊過的）：局面走向、回扣先前關鍵時刻、"
+        "猜接下來的著法、子力擺位的觀察、與此局面相關的棋理或趣談。\n"
+        "規則：2 句，兩人一來一往；每句短（15-40字）、語氣放鬆口語；"
         "只能引用以下事實，不可捏造：\n"
         f"{material}\n"
         '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
@@ -186,7 +198,7 @@ def generate_filler(state: dict, persona: str) -> list[dict]:
         return [{"speaker": t["speaker"], "text": t["text"].strip()}
                 for t in turns
                 if t.get("speaker") in ("play_by_play", "analyst")
-                and t.get("text", "").strip()][:2]
+                and t.get("text", "").strip()][:3]
     except Exception:
         return []
 
@@ -196,7 +208,10 @@ def light_commentary_node(state: dict, persona: str) -> dict:
     facts = build_facts(state, persona)
     state["facts"] = facts
     # async worker sets this to catch up when the game has moved on
-    if state.pop("skip_generation", False):
+    # (explicit reset — with LangGraph a missing key keeps the old channel value)
+    skip = state.get("skip_generation", False)
+    state["skip_generation"] = False
+    if skip:
         state["commentary"] = []
         return state
     # routine moves can be silent
@@ -210,7 +225,9 @@ def light_commentary_node(state: dict, persona: str) -> dict:
 def booth_node(state: dict, persona: str) -> dict:
     facts = build_facts(state, persona)
     state["facts"] = facts
-    if state.pop("skip_generation", False):
+    skip = state.get("skip_generation", False)
+    state["skip_generation"] = False
+    if skip:
         state["commentary"] = []
         return state
     if config.USE_LLM:
