@@ -26,7 +26,7 @@ from pathlib import Path
 import config
 import tts
 from engine.stockfish_client import StockfishClient
-from graph.nodes.booth import generate_filler
+from graph.nodes.booth import generate_filler, generate_recap
 from pipeline import make_stepper
 
 app = FastAPI(title="Chess Broadcaster")
@@ -173,58 +173,103 @@ def _worker():
             chatting = bool(turns)
             return
 
-        # kind == "move": run the full pipeline on the worker's own board
-        mv = chess.Move.from_uci(payload)
-        pipe["last_move"] = mv
-        pipe["persona"] = opts["persona"]
-        # Skip generation only when truly behind (>=2 jobs piled up).
-        # A human move + instant engine reply is the NORMAL rhythm — with a
-        # >=1 threshold the human's move was systematically silenced and the
-        # commentary only ever talked about the engine's side.
-        backlog = _jobs.qsize()
-        pipe["skip_generation"] = backlog >= 2
-        # when there's already work waiting, keep the script tight
-        pipe["dialogue_turns"] = "2-3" if backlog >= 1 else "3-5"
-        try:
-            pipe = _step(pipe)
-        except Exception:
-            import logging
-            logging.exception("pipeline failed for %s", payload)
-            pipe["board"].push(mv)            # keep the worker board in sync
-            pipe.setdefault("move_history", []).append(mv)
+        # kind == "move": drain any backlog into a batch. One move = normal
+        # per-move script; several moves = ONE compressed「剛剛…」recap
+        # focused on the batch's key move (like real commentators catching up).
+        batch = [payload]
+        while True:
+            try:
+                nxt = _jobs.get_nowait()
+            except queue.Empty:
+                break
+            k2, g2, p2 = nxt
+            if k2 == "move" and g2 == gid:
+                batch.append(p2)
+            elif k2 == "filler":
+                continue                      # chatter about an old position: drop
+            else:
+                _jobs.put(nxt)                # reset etc. — handle after the batch
+                break
+
+        solo = len(batch) == 1
+        infos, key = [], None                 # per-move digest; most important one
+        _RANK = {"routine": 0, "notable": 1, "critical": 2}
+        for uci in batch:
+            mv = chess.Move.from_uci(uci)
+            pipe["last_move"] = mv
+            pipe["persona"] = opts["persona"]
+            pipe["skip_generation"] = not solo
+            pipe["dialogue_turns"] = "3-5" if _jobs.empty() else "2-3"
+            try:
+                pipe = _step(pipe)
+            except Exception:
+                import logging
+                logging.exception("pipeline failed for %s", uci)
+                pipe["board"].push(mv)        # keep the worker board in sync
+                pipe.setdefault("move_history", []).append(mv)
+                continue
+            pipe["move_history"].append(mv)
+            ply = len(pipe["move_history"])
+
+            ev = pipe["event"]
+            a = pipe["analysis"]
+            publish({"type": "eval", "score_cp": a["score_cp"],
+                     "delta_cp": a["delta_cp"], "mate_in": a["mate_in"],
+                     "phase": ev["phase"], "san": a["played_san"], "ply": ply})
+
+            info = {"san": a["played_san"],
+                    "by": "black" if pipe["board"].turn else "white",
+                    "severity": ev["severity_label"], "types": ev["types"],
+                    "delta_cp": a["delta_cp"], "ply": ply,
+                    "facts": pipe.get("facts"),
+                    "intensity": pipe.get("register_intensity", 0.2),
+                    "route": pipe.get("route", "light")}
+            infos.append(info)
+            if key is None or _RANK[info["severity"]] > _RANK[key["severity"]] \
+                    or (_RANK[info["severity"]] == _RANK[key["severity"]]
+                        and abs(info["delta_cp"]) >= abs(key["delta_cp"])):
+                key = info
+
+            # batch moves show as muted lines; solo silent moves too
+            if not solo or not pipe["commentary"]:
+                _emit({"severity": info["severity"], "route": info["route"],
+                       "speaker": None, "text": info["san"],
+                       "audio": None, "flush": False, "ply": ply})
+
+        if not infos:
             return
-        pipe["move_history"].append(mv)
-        ply = len(pipe["move_history"])
 
-        ev = pipe["event"]
-        a = pipe["analysis"]
-        publish({"type": "eval", "score_cp": a["score_cp"],
-                 "delta_cp": a["delta_cp"], "mate_in": a["mate_in"],
-                 "phase": ev["phase"], "san": a["played_san"], "ply": ply})
+        last_ply = infos[-1]["ply"]
 
-        commentary = pipe["commentary"]
-        label = ev["severity_label"]
+        # ── produce speech ──
+        if solo:
+            commentary = pipe["commentary"]
+            label = infos[0]["severity"]
+            if not commentary:
+                return                        # routine: silence, chatter covers it
+        else:
+            # recap only worth doing when something non-routine happened
+            if _RANK[key["severity"]] == 0 or not key["facts"]:
+                return
+            digest = [{k: v for k, v in i.items()
+                       if k in ("san", "by", "severity", "types", "delta_cp")}
+                      for i in infos]
+            commentary = generate_recap(key["facts"], digest,
+                                        "2-4" if _jobs.empty() else "2")
+            label = key["severity"]
+            if not commentary:
+                return
 
-        # routine moves stay silent (muted feed line only) — dead air is
-        # covered by the chatter session, which speaks in full sentences
-        if not commentary:
-            _emit({"severity": label, "route": pipe["route"],
-                   "speaker": None, "text": a["played_san"],
-                   "audio": None, "flush": False, "ply": ply})
-            return
-
-        # real commentary ends the chatter session (notable queues politely,
-        # critical barges in and cuts the audio)
         chatting = False
-        intensity = pipe.get("register_intensity", 0.2)
+        intensity = key["intensity"] if not solo else pipe.get("register_intensity", 0.2)
         flush = label == "critical"
         for i, turn in enumerate(commentary):
             if gid != GAME["id"]:
                 return
             audio = _speak(turn["text"], turn["speaker"], intensity, opts)
-            _emit({"severity": label, "route": pipe["route"],
+            _emit({"severity": label, "route": "recap" if not solo else infos[0]["route"],
                    "speaker": turn["speaker"], "text": turn["text"],
-                   "audio": audio, "flush": flush and i == 0, "ply": ply})
+                   "audio": audio, "flush": flush and i == 0, "ply": last_ply})
             chat_log.append(turn)             # chat continues from what was said
         del chat_log[:-16]
 

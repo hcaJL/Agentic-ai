@@ -641,20 +641,25 @@ function renderMeta() {
 /* ── audio queue: utterances play in order; flush = barge-in ── */
 const AudioQ = {
   q: [], cur: null, lastEnd: Date.now(),
-  enqueue(b64, flush, isFiller, ply) {
+  enqueue(b64, flush, sev, ply) {
     if (flush) this.flush();
-    this.q.push({ b64, filler: !!isFiller, ply });
+    this.q.push({ b64, sev, ply });
     this.pump();
   },
   flush() {
     this.q = [];
     if (this.cur) { try { this.cur.pause(); } catch (e) {} this.cur = null; }
   },
-  // the broadcast must stay current: once the game reaches `ply`, unplayed
-  // audio older than the previous move is stale — drop it (text cards stay)
+  // staleness tolerance by importance (in plies): chatter about an old
+  // position is pointless, but a critical clip is worth hearing even late
+  MAX_AGE: { filler: 0, routine: 1, notable: 2 },   // critical: keep forever
   trim(ply) {
     if (typeof ply !== 'number') return;
-    this.q = this.q.filter(it => it.ply === undefined || it.ply >= ply - 1);
+    this.q = this.q.filter(it => {
+      if (it.ply === undefined) return true;
+      const age = this.MAX_AGE[it.sev];
+      return age === undefined || it.ply >= ply - age;
+    });
   },
   pump() {
     if (this.cur || !this.q.length) return;
@@ -666,12 +671,12 @@ const AudioQ = {
     a.play().catch(done);
     // keep the conversation flowing: while the LAST queued chatter clip is
     // playing, ask for the next batch so it arrives before the silence
-    if (item.filler && this.q.length === 0) requestFiller('continue');
+    if (item.sev === 'filler' && this.q.length === 0) requestFiller('continue');
   },
   idleMs() { return (this.cur || this.q.length) ? 0 : Date.now() - this.lastEnd; },
 };
 
-function playB64(b64) { AudioQ.enqueue(b64, true, false); }
+function playB64(b64) { AudioQ.enqueue(b64, true, 'replay'); }
 
 function addFeedEntry(e, live) {
   const feed = $('#feed');
@@ -695,7 +700,7 @@ function addFeedEntry(e, live) {
     el.querySelector('.txt').textContent = e.text;
     if (e.audio) {
       el.querySelector('.playbtn').onclick = () => playB64(e.audio);
-      if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity === 'filler', e.ply);
+      if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity, e.ply);
     }
   }
   feed.prepend(el);

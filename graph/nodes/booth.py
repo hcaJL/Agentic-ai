@@ -142,6 +142,46 @@ def _dialogue_generate(facts: dict, n_turns: str = "3-5") -> list[dict]:
     return out
 
 
+def generate_recap(key_facts: dict, batch_moves: list[dict],
+                   n_turns: str = "2-4") -> list[dict]:
+    """Catch-up recap: the booth fell behind several moves — one compressed
+    script in a「剛剛…」retrospective voice, focused on the most important
+    move of the batch, mentioning the rest in passing.
+    batch_moves: [{"san", "by", "severity", "types", "delta_cp"}, ...]
+    Returns [] on failure (caller then stays silent for the batch)."""
+    if not config.USE_LLM:
+        return []
+    import json as _json
+    import re as _re
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=420)
+    intensity = key_facts["register"]["intensity"]
+    sys = persona_prompt(key_facts["register"]["persona"], intensity)
+    key_san = key_facts["move"]["san"]
+    msg = (
+        f"{sys}\n"
+        "你們是兩位棋賽播報員。剛才棋下得很快，你們來不及逐步講解，"
+        "現在要用「回顧補講」的方式一次帶過剛剛的幾步：\n"
+        f"剛剛依序發生了這些（最後一步是最新局面）：{batch_moves}\n"
+        f"其中最關鍵的一步是 {key_san}，它的完整事實如下（只能引用這些，不可捏造）：\n"
+        f"{key_facts}\n"
+        f"規則：共 {n_turns} 句，兩人交替接話；用回顧口吻開場"
+        "（例如「剛剛這幾步…」「趁現在補一下，剛才那步…」）；"
+        f"把重點放在 {key_san}，其他步一句帶過或不提；每句短（15-45字）、口語。\n"
+        '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+    )
+    try:
+        raw = llm.invoke(msg).content.strip()
+        m = _re.search(r"\[.*\]", raw, _re.S)
+        turns = _json.loads(m.group(0) if m else raw)
+        return [{"speaker": t["speaker"], "text": t["text"].strip()}
+                for t in turns
+                if t.get("speaker") in ("play_by_play", "analyst")
+                and t.get("text", "").strip()]
+    except Exception:
+        return []
+
+
 def generate_filler(state: dict, persona: str,
                     chat_history: list[dict] | None = None) -> list[dict]:
     """Phase C: dead-air chatter — an ongoing conversation, not one-shot rounds.
