@@ -100,10 +100,105 @@ def _template(facts: dict, speaker: str) -> str:
     return " ".join(bits)
 
 
+# ---------- dialogue script (Phase B: two voices in conversation) ----------
+def _dialogue_generate(facts: dict, n_turns: str = "3-5") -> list[dict]:
+    """One LLM call → a short alternating dialogue script.
+    Returns [{"speaker": ..., "text": ...}, ...]; raises on failure."""
+    import json as _json
+    import re as _re
+    from langchain_openai import ChatOpenAI
+    llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=500)
+    sys = persona_prompt(facts["register"]["persona"], facts["register"]["intensity"])
+    intensity = facts["register"]["intensity"]
+    interject = ("第一句要用打斷式的驚嘆開場（例如「欸等等——」「哇這步！」），"
+                 if intensity >= 0.8 else "")
+    msg = (
+        f"{sys}\n"
+        "你要寫一段「兩位棋賽播報員的即時對話」，像真人搭檔接話，不是各自獨白。\n"
+        "角色：play_by_play（主播，描述發生什麼、拋出鉤子）、"
+        "analyst（分析師，接話解釋為什麼、給續法）。\n"
+        f"規則：共 {n_turns} 句，兩人交替；每句短（15-40字），口語、可加語助詞；"
+        "後一句要接前一句的話尾，可以互相附和或反問；"
+        f"{interject}"
+        "不要重複同樣的資訊；"
+        "memory.callbacks 有本局先前關鍵時刻，適合時回扣；"
+        "memory.theory 有棋理，相關才用。\n"
+        "只能使用以下事實，不可捏造評估或棋步：\n"
+        f"{facts}\n"
+        '輸出 JSON 陣列：[{"speaker":"play_by_play","text":"..."},'
+        '{"speaker":"analyst","text":"..."}]，不要其他文字。'
+    )
+    raw = llm.invoke(msg).content.strip()
+    m = _re.search(r"\[.*\]", raw, _re.S)
+    turns = _json.loads(m.group(0) if m else raw)
+    out = []
+    for t in turns:
+        sp = t.get("speaker")
+        tx = (t.get("text") or "").strip()
+        if sp in ("play_by_play", "analyst") and tx:
+            out.append({"speaker": sp, "text": tx})
+    if not out:
+        raise ValueError("empty dialogue")
+    return out
+
+
+def generate_filler(state: dict, persona: str) -> list[dict]:
+    """Phase C: dead-air chatter. 1-2 short conversational turns about the
+    current position — call-backs, likely continuations, light observations.
+    Returns [] when no LLM is available or generation fails."""
+    if not config.USE_LLM:
+        return []
+    import json as _json
+    import re as _re
+    from langchain_openai import ChatOpenAI
+    board: chess.Board = state["board"]
+    a = state.get("analysis") or {}
+    mem = state.get("retrieved_memory", {}) or {}
+    b = chess.Board()
+    sans = []
+    for mv in state.get("move_history", []):
+        try:
+            sans.append(b.san(mv)); b.push(mv)
+        except Exception:
+            break
+    material = {
+        "fen": board.fen(),
+        "recent_moves": sans[-10:],
+        "eval_cp": a.get("score_cp"),
+        "likely_next": [t.get("san") for t in (a.get("top_moves") or [])[:3]],
+        "callbacks": (mem.get("callbacks") or state.get("said_so_far", []))[-3:],
+    }
+    llm = ChatOpenAI(model=config.LIGHT_MODEL, max_tokens=220)
+    sys = persona_prompt(persona, 0.25)
+    msg = (
+        f"{sys}\n"
+        "現在棋局暫時沒有新動作，你們兩位播報員要自然地填補空檔，像轉播空檔的閒聊：\n"
+        "可以聊：局面到目前的走向、回扣先前的關鍵時刻、猜接下來可能的著法、輕鬆的觀察。\n"
+        "規則：1-2 句，兩人一來一往或單人一句；每句短（15-40字）、語氣放鬆；"
+        "只能引用以下事實，不可捏造：\n"
+        f"{material}\n"
+        '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+    )
+    try:
+        raw = llm.invoke(msg).content.strip()
+        m = _re.search(r"\[.*\]", raw, _re.S)
+        turns = _json.loads(m.group(0) if m else raw)
+        return [{"speaker": t["speaker"], "text": t["text"].strip()}
+                for t in turns
+                if t.get("speaker") in ("play_by_play", "analyst")
+                and t.get("text", "").strip()][:2]
+    except Exception:
+        return []
+
+
 # ---------- nodes ----------
 def light_commentary_node(state: dict, persona: str) -> dict:
     facts = build_facts(state, persona)
     state["facts"] = facts
+    # async worker sets this to catch up when the game has moved on
+    if state.pop("skip_generation", False):
+        state["commentary"] = []
+        return state
     # routine moves can be silent
     if facts["event"]["severity_label"] == "routine" and not facts["move"]["is_check"]:
         state["commentary"] = []
@@ -115,6 +210,15 @@ def light_commentary_node(state: dict, persona: str) -> dict:
 def booth_node(state: dict, persona: str) -> dict:
     facts = build_facts(state, persona)
     state["facts"] = facts
+    if state.pop("skip_generation", False):
+        state["commentary"] = []
+        return state
+    if config.USE_LLM:
+        try:
+            state["commentary"] = _dialogue_generate(facts)
+            return state
+        except Exception:
+            pass  # fall back to the two-monologue form
     state["commentary"] = [
         {"speaker": "play_by_play", "text": _generate(facts, "play_by_play")},
         {"speaker": "analyst", "text": _generate(facts, "analyst")},

@@ -324,6 +324,8 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .card.critical { border-color: #ef4444; } .card.critical .who { color: #ef4444; }
 .card.notable  { border-color: #f0b429; } .card.notable  .who { color: #f0b429; }
 .card.routine  { border-color: #6b7280; } .card.routine  .who { color: #9aa3b2; }
+.card.filler   { border-color: #4a5568; background: rgba(255,255,255,.015); }
+.card.filler .who { color: #7c8798; } .card.filler .txt { color: #a8b0bf; }
 .card .playbtn {
   margin-left: auto; cursor: pointer; border: none; background: none;
   color: var(--muted); font-size: 13px; padding: 0 2px;
@@ -607,16 +609,12 @@ function renderMeta() {
   }
   $('#board').classList.toggle('playable', !busy && !S.game_over && !S.engine_to_move);
 
-  // eval bar + text (white POV)
-  if (S.eval) {
-    const cp = Math.max(-1000, Math.min(1000, S.eval.score_cp));
-    $('#evalWhite').style.height = (50 + cp / 20) * .9 + 5 + '%';
-  }
+  // eval bar arrives asynchronously over SSE
+  renderEval();
 
   // scoresheet (collapsible)
   if (S.sans.length) {
     $('#scoreCnt').textContent = `${S.sans.length} 手`;
-    $('#scoreEval').textContent = S.eval ? `評估 ${(S.eval.score_cp / 100).toFixed(1)}` : '';
     let html = '';
     for (let i = 0; i < S.sans.length; i += 2) {
       html += `<div class="scorerow"><span class="n">${i / 2 + 1}.</span>` +
@@ -640,53 +638,97 @@ function renderMeta() {
   $('#engineNote').textContent = notes.join(' ');
 }
 
-function addFeedEntries(entries) {
+/* ── audio queue: utterances play in order; flush = barge-in ── */
+const AudioQ = {
+  q: [], cur: null, lastEnd: Date.now(),
+  enqueue(b64, flush) {
+    if (flush) this.flush();
+    this.q.push(b64);
+    this.pump();
+  },
+  flush() {
+    this.q = [];
+    if (this.cur) { try { this.cur.pause(); } catch (e) {} this.cur = null; }
+  },
+  pump() {
+    if (this.cur || !this.q.length) return;
+    const a = new Audio('data:audio/mp3;base64,' + this.q.shift());
+    this.cur = a;
+    const done = () => { this.cur = null; this.lastEnd = Date.now(); this.pump(); };
+    a.onended = done; a.onerror = done;
+    a.play().catch(done);
+  },
+  idleMs() { return (this.cur || this.q.length) ? 0 : Date.now() - this.lastEnd; },
+};
+
+function playB64(b64) { AudioQ.enqueue(b64, true); }
+
+function addFeedEntry(e, live) {
   const feed = $('#feed');
   const empty = feed.querySelector('.feedempty');
-  if (empty && entries.length) empty.remove();
-  const clips = [];
-  for (const e of entries) {
-    let el;
-    if (!e.speaker) {
-      el = document.createElement('div');
-      el.className = 'mutedline';
-      el.textContent = `· ${e.text}（例行，靜默）`;
-    } else {
-      el = document.createElement('div');
-      el.className = 'card ' + e.severity;
-      const name = SPEAKER_NAME[e.speaker] || e.speaker;
-      const icon = SPEAKER_ICON[e.speaker] || '💬';
-      el.innerHTML =
-        `<div class="who">${icon} ${name} · ${e.route.toUpperCase()}` +
-        (e.audio ? `<button class="playbtn" title="重播語音">▶</button>` : '') +
-        `</div><div class="txt"></div>`;
-      el.querySelector('.txt').textContent = e.text;
-      if (e.audio) {
-        clips.push(e.audio);
-        el.querySelector('.playbtn').onclick = () => playB64(e.audio);
-      }
+  if (empty) empty.remove();
+  let el;
+  if (!e.speaker) {
+    el = document.createElement('div');
+    el.className = 'mutedline';
+    el.textContent = `· ${e.text}（例行，靜默）`;
+  } else {
+    el = document.createElement('div');
+    el.className = 'card ' + e.severity;
+    const name = SPEAKER_NAME[e.speaker] || e.speaker;
+    const icon = e.severity === 'filler' ? '💬' : (SPEAKER_ICON[e.speaker] || '💬');
+    const route = e.severity === 'filler' ? '閒聊' : e.route.toUpperCase();
+    el.innerHTML =
+      `<div class="who">${icon} ${name} · ${route}` +
+      (e.audio ? `<button class="playbtn" title="重播語音">▶</button>` : '') +
+      `</div><div class="txt"></div>`;
+    el.querySelector('.txt').textContent = e.text;
+    if (e.audio) {
+      el.querySelector('.playbtn').onclick = () => playB64(e.audio);
+      if (live) AudioQ.enqueue(e.audio, !!e.flush);
     }
-    feed.prepend(el);
   }
-  if (clips.length) playQueue(clips);
+  feed.prepend(el);
+  if (live) AudioQ.lastEnd = Math.max(AudioQ.lastEnd, Date.now());
 }
-let audioEl = null;
-function playB64(b64) {
-  if (audioEl) audioEl.pause();
-  audioEl = new Audio('data:audio/mp3;base64,' + b64);
-  audioEl.play().catch(() => {});
-}
-function playQueue(clips) {
-  if (audioEl) audioEl.pause();
-  let i = 0;
-  const next = () => {
-    if (i >= clips.length) return;
-    audioEl = new Audio('data:audio/mp3;base64,' + clips[i++]);
-    audioEl.onended = next;
-    audioEl.play().catch(() => {});
+
+/* ── SSE: commentary + eval arrive whenever they're ready ── */
+let EVAL = null;
+function connectStream() {
+  const es = new EventSource('/api/stream');
+  es.onmessage = ev => {
+    let e;
+    try { e = JSON.parse(ev.data); } catch (err) { return; }
+    if (e.type === 'utterance') {
+      addFeedEntry(e, true);
+    } else if (e.type === 'eval') {
+      EVAL = e;
+      renderEval();
+    } else if (e.type === 'reset') {
+      EVAL = null;
+      AudioQ.flush();
+    }
   };
-  next();
+  // EventSource auto-reconnects on error
 }
+
+function renderEval() {
+  if (!EVAL) { $('#evalWhite').style.height = '50%'; return; }
+  const cp = Math.max(-1000, Math.min(1000, EVAL.score_cp));
+  $('#evalWhite').style.height = (50 + cp / 20) * .9 + 5 + '%';
+  if (S && S.sans.length)
+    $('#scoreEval').textContent = `評估 ${(EVAL.score_cp / 100).toFixed(1)}`;
+}
+
+/* ── dead-air detection → filler chat (Phase C) ── */
+let lastFillerReq = 0;
+setInterval(() => {
+  if (!S || !S.sans || !S.sans.length || S.game_over || busy) return;
+  if (AudioQ.idleMs() < 5000) return;
+  if (Date.now() - lastFillerReq < 25000) return;
+  lastFillerReq = Date.now();
+  fetch('/api/filler', { method: 'POST' }).catch(() => {});
+}, 1000);
 
 /* ── interactions ── */
 function canSelect(sq) {
@@ -734,13 +776,18 @@ function applySnapshot(data) {
   syncPieces(S.fen);
   paint();
   renderMeta();
-  addFeedEntries(S.new_entries || []);
+  // commentary/eval arrive separately over SSE
 }
 
 async function refresh() {
   const r = await fetch('/api/state');
   S = await r.json();
   syncPieces(S.fen); paint(); renderMeta();
+  // rebuild the feed on page (re)load, without autoplaying old audio
+  if (S.feed && S.feed.length) {
+    $('#feed').innerHTML = '';
+    for (const e of S.feed) addFeedEntry(e, false);
+  }
 }
 
 /* ── settings ── */
@@ -829,6 +876,7 @@ $('#btnNew').addEventListener('click', async () => {
 (async function boot() {
   PIECES = await (await fetch('/api/pieces')).json();
   buildBoard();
+  connectStream();
   await refresh();
 })();
 </script>
