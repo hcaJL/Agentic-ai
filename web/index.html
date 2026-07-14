@@ -33,25 +33,35 @@ body {
 }
 
 /* ── Board themes ──────────────────────────────────────── */
+/* each theme also sets its own move-highlight colors:
+   --sel selected square · --lastmv last move · --hov hover on pickable piece */
 body[data-btheme="wood"] {
   --sqL1: #f2e3c6; --sqL2: #e9d6af; --sqD1: #b3875f; --sqD2: #9e7148;
   --fr1: #4d3a26;  --fr2: #35281a;  --fr3: #241a10;
   --hint: 45, 30, 10;
+  --sel: rgba(246, 246, 105, .55); --lastmv: rgba(212, 169, 78, .38);
+  --hov: rgba(246, 240, 150, .28);
 }
 body[data-btheme="emerald"] {
   --sqL1: #f0f1da; --sqL2: #e5e8c2; --sqD1: #7f9c56; --sqD2: #6c8b47;
   --fr1: #33422b;  --fr2: #25311f;  --fr3: #182013;
   --hint: 16, 30, 12;
+  --sel: rgba(246, 246, 105, .55); --lastmv: rgba(205, 210, 106, .45);
+  --hov: rgba(246, 240, 150, .28);
 }
 body[data-btheme="ocean"] {
   --sqL1: #e7eef3; --sqL2: #d8e3eb; --sqD1: #82a5be; --sqD2: #6e94af;
   --fr1: #2b3c50;  --fr2: #1f2c3c;  --fr3: #151e29;
   --hint: 10, 22, 34;
+  --sel: rgba(255, 220, 90, .5);   --lastmv: rgba(255, 200, 80, .32);
+  --hov: rgba(255, 230, 140, .26);
 }
 body[data-btheme="graphite"] {
   --sqL1: #d3d7e0; --sqL2: #c5cad6; --sqD1: #71798b; --sqD2: #61697b;
   --fr1: #353b47;  --fr2: #272c35;  --fr3: #1a1e25;
   --hint: 12, 15, 22;
+  --sel: rgba(96, 165, 250, .48);  --lastmv: rgba(129, 140, 248, .34);
+  --hov: rgba(140, 190, 255, .26);
 }
 
 /* ── Header ─────────────────────────────────────────────── */
@@ -240,7 +250,7 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .sq.dark  { background: linear-gradient(135deg, var(--sqD1) 0%, var(--sqD2) 100%); }
 /* hover on a selectable piece's square */
 #board.playable .sq.canpick:hover .tint {
-  background: rgba(246, 240, 150, .28); opacity: 1;
+  background: var(--hov); opacity: 1;
 }
 .sq .tint { position: absolute; inset: 0; opacity: 0; transition: opacity .15s; }
 .sq.lastmv .tint { background: var(--lastmv); opacity: 1; }
@@ -351,7 +361,7 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 #veil .d { color: var(--muted); margin-top: 8px; font-size: 14px; }
 </style>
 </head>
-<body data-btheme="wood">
+<body data-btheme="graphite">
 
 <header>
   <div class="logo">♞</div>
@@ -411,10 +421,10 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     <div class="field">
       <label>棋盤色調</label>
       <div class="pills" id="themePills">
-        <div class="pill on" data-v="wood">胡桃木</div>
+        <div class="pill on" data-v="graphite">石墨</div>
+        <div class="pill" data-v="wood">胡桃木</div>
         <div class="pill" data-v="emerald">翡翠</div>
         <div class="pill" data-v="ocean">海洋</div>
-        <div class="pill" data-v="graphite">石墨</div>
       </div>
     </div>
 
