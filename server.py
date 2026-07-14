@@ -42,7 +42,7 @@ def _fresh_game(opts: dict) -> dict:
 
 
 GAME = _fresh_game({"vs_engine": True, "human_is_white": True, "depth": 8,
-                    "persona": "calm", "tts_on": False, "verbose": False})
+                    "persona": "calm", "tts_on": True, "verbose": True})
 
 
 # ── Pipeline: play one move, collect commentary + audio ───────────────────────
@@ -132,8 +132,8 @@ class NewGameReq(BaseModel):
     human_is_white: bool = True
     depth: int = 8
     persona: str = "calm"
-    tts_on: bool = False
-    verbose: bool = False
+    tts_on: bool = True     # 語音一律開啟（沒有 API key 時自動退化成純文字）
+    verbose: bool = True    # 每步都播報
 
 
 class MoveReq(BaseModel):
