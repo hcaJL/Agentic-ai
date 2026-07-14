@@ -82,7 +82,7 @@ _lock = threading.Lock()
 
 def _default_opts() -> dict:
     return {"vs_engine": True, "human_is_white": True, "depth": 8,
-            "persona": "calm", "tts_on": True, "verbose": True}
+            "persona": "calm", "tts_on": True}
 
 
 GAME = {"id": 0, "board": chess.Board(), "sans": [], "feed": [],
@@ -197,11 +197,8 @@ def _worker():
         commentary = pipe["commentary"]
         label = ev["severity_label"]
 
-        # routine move while the pair is mid-chat: don't butt in with a bare
-        # SAN line — let the conversation flow (next chat batch sees the move)
-        if not commentary and opts["verbose"] and _jobs.empty() and not chatting:
-            commentary = [{"speaker": "play_by_play", "text": a["played_san"]}]
-
+        # routine moves stay silent (muted feed line only) — dead air is
+        # covered by the chatter session, which speaks in full sentences
         if not commentary:
             _emit({"severity": label, "route": pipe["route"],
                    "speaker": None, "text": a["played_san"],
@@ -243,8 +240,7 @@ class NewGameReq(BaseModel):
     human_is_white: bool = True
     depth: int = 8
     persona: str = "calm"
-    tts_on: bool = True
-    verbose: bool = True
+    tts_on: bool = True     # 語音一律開啟（沒有 API key 時自動退化成純文字）
 
 
 class MoveReq(BaseModel):
@@ -254,7 +250,6 @@ class MoveReq(BaseModel):
 class OptsReq(BaseModel):
     persona: str | None = None
     tts_on: bool | None = None
-    verbose: bool | None = None
     depth: int | None = None
 
 
