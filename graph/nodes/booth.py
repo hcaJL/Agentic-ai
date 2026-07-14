@@ -230,7 +230,8 @@ def booth_node(state: dict, persona: str) -> dict:
     state["skip_generation"] = False
     if config.USE_LLM:
         try:
-            state["commentary"] = _dialogue_generate(facts)
+            state["commentary"] = _dialogue_generate(
+                facts, state.get("dialogue_turns") or "3-5")
             return state
         except Exception:
             pass  # fall back to the two-monologue form

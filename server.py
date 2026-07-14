@@ -159,6 +159,7 @@ def _worker():
         if kind == "filler":
             if not _jobs.empty() or not pipe["move_history"]:
                 return                        # real work pending / nothing to chat about
+            ply = len(pipe["move_history"])
             turns = generate_filler(pipe, opts["persona"], chat_log)
             for t in turns:
                 if gid != GAME["id"]:
@@ -166,7 +167,7 @@ def _worker():
                 audio = _speak(t["text"], t["speaker"], 0.25, opts)
                 _emit({"severity": "filler", "route": "filler",
                        "speaker": t["speaker"], "text": t["text"],
-                       "audio": audio, "flush": False})
+                       "audio": audio, "flush": False, "ply": ply})
                 chat_log.append(t)
             del chat_log[:-16]
             chatting = bool(turns)
@@ -180,7 +181,10 @@ def _worker():
         # A human move + instant engine reply is the NORMAL rhythm — with a
         # >=1 threshold the human's move was systematically silenced and the
         # commentary only ever talked about the engine's side.
-        pipe["skip_generation"] = _jobs.qsize() >= 2
+        backlog = _jobs.qsize()
+        pipe["skip_generation"] = backlog >= 2
+        # when there's already work waiting, keep the script tight
+        pipe["dialogue_turns"] = "2-3" if backlog >= 1 else "3-5"
         try:
             pipe = _step(pipe)
         except Exception:
@@ -190,12 +194,13 @@ def _worker():
             pipe.setdefault("move_history", []).append(mv)
             return
         pipe["move_history"].append(mv)
+        ply = len(pipe["move_history"])
 
         ev = pipe["event"]
         a = pipe["analysis"]
         publish({"type": "eval", "score_cp": a["score_cp"],
                  "delta_cp": a["delta_cp"], "mate_in": a["mate_in"],
-                 "phase": ev["phase"], "san": a["played_san"]})
+                 "phase": ev["phase"], "san": a["played_san"], "ply": ply})
 
         commentary = pipe["commentary"]
         label = ev["severity_label"]
@@ -205,7 +210,7 @@ def _worker():
         if not commentary:
             _emit({"severity": label, "route": pipe["route"],
                    "speaker": None, "text": a["played_san"],
-                   "audio": None, "flush": False})
+                   "audio": None, "flush": False, "ply": ply})
             return
 
         # real commentary ends the chatter session (notable queues politely,
@@ -219,7 +224,7 @@ def _worker():
             audio = _speak(turn["text"], turn["speaker"], intensity, opts)
             _emit({"severity": label, "route": pipe["route"],
                    "speaker": turn["speaker"], "text": turn["text"],
-                   "audio": audio, "flush": flush and i == 0})
+                   "audio": audio, "flush": flush and i == 0, "ply": ply})
             chat_log.append(turn)             # chat continues from what was said
         del chat_log[:-16]
 
