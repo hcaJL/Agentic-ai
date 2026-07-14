@@ -176,8 +176,11 @@ def _worker():
         mv = chess.Move.from_uci(payload)
         pipe["last_move"] = mv
         pipe["persona"] = opts["persona"]
-        # behind schedule? skip generation for this move, keep state coherent
-        pipe["skip_generation"] = not _jobs.empty()
+        # Skip generation only when truly behind (>=2 jobs piled up).
+        # A human move + instant engine reply is the NORMAL rhythm — with a
+        # >=1 threshold the human's move was systematically silenced and the
+        # commentary only ever talked about the engine's side.
+        pipe["skip_generation"] = _jobs.qsize() >= 2
         try:
             pipe = _step(pipe)
         except Exception:

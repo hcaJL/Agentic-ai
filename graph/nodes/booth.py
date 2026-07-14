@@ -225,11 +225,9 @@ def light_commentary_node(state: dict, persona: str) -> dict:
 def booth_node(state: dict, persona: str) -> dict:
     facts = build_facts(state, persona)
     state["facts"] = facts
-    skip = state.get("skip_generation", False)
+    # deep path = critical moment: always worth commenting, even when the
+    # worker is behind — real commentators circle back to the big moves
     state["skip_generation"] = False
-    if skip:
-        state["commentary"] = []
-        return state
     if config.USE_LLM:
         try:
             state["commentary"] = _dialogue_generate(facts)
