@@ -537,6 +537,10 @@ function syncPieces(fen) {
     delete pieceEls[from];
     // capture: fade out the occupant first
     if (pieceEls[to]) { fadeOut(pieceEls[to]); delete pieceEls[to]; }
+    // `to` was also in removed (its occupant changed) — drop it so the
+    // cleanup loop below doesn't fade the piece that just slid in
+    const toIdx = removed.indexOf(to);
+    if (toIdx !== -1) removed.splice(toIdx, 1);
     pieceEls[to] = el;
     el.dataset.sq = to;
     setPiecePos(el, to);
