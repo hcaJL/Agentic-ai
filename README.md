@@ -21,12 +21,13 @@
 - ✅ ChromaDB 分層記憶第 2 層（棋理檢索，語料在 `memory/theory_seed.py`；沒裝 chromadb 時自動退回關鍵字比對）
 - ✅ 三層消融 harness（`tools/ablation.py`，baseline / rag / full 對照＋盲評，報告在 `eval_out/`）
 - ✅ LangGraph 化（裝了 `langgraph` 自動走圖，沒裝退回 sequential；Director 路由是圖上真正的 conditional edge）
-- ✅ TTS 語音（OpenAI TTS，`tts.py`；兩位主播不同聲線，語氣跟著 register 強度走。Streamlit 側欄開「🔊 語音播報」）
+- ✅ TTS 語音（OpenAI TTS，`tts.py`；兩位主播不同聲線，語氣跟著 register 強度走）
+- ✅ 對弈模式 Web 版「棋訊直播間」（FastAPI + 自訂前端，見下節）
 - ⬜ 棋手風格檔（分層記憶第 3 層，stretch）
 
-## 對弈模式（feature/human-play）
+## 對弈模式：棋訊直播間（feature/human-play）
 
-自己下棋、讓主播台實況解說你的對局。**棋訊直播間** Web 版（推薦）：
+自己下棋、讓主播台實況解說你的對局。FastAPI 後端＋自訂深色直播間前端：
 
 ```bash
 pip install fastapi uvicorn
@@ -34,11 +35,27 @@ uvicorn server:app
 # 開 http://localhost:8000
 ```
 
-- 深色直播間介面，點選棋子走棋，走子有滑動動畫、**零閃爍**
+**介面**
+
+- 點選棋子走棋：可動的棋子滑鼠移過會亮、選中會「拿起來」、
+  可走格顯示圓點／可吃子顯示圓環（Lichess 風格）
+- 走子是滑動動畫、吃子淡出，**零閃爍**（棋盤是 DOM 原地更新，不重新載入）
+- 棋盤色調可切換：**石墨**（預設）／胡桃木／翡翠／海洋，
+  走棋高亮顏色跟著主題配色，偏好會記住
+- 左側評估條即時升降；棋譜收合成按鈕，點開看完整棋步
+- 對局結束顯示結果幕（將殺／和棋）
+
+**對局**
+
 - 對手可選 **Stockfish**（可調搜索深度 2–16）或**雙人對弈**，執黑自動翻轉棋盤
 - 你的每一步與引擎的回應都走同一條 LangGraph 管線：例行步靜默、
-  關鍵步觸發雙主播＋棋理引用＋回扣；「每步都播報」可強制解說
-- TTS 語音直接在瀏覽器播放（開側欄「🔊 語音播報」）
+  關鍵步觸發雙主播＋棋理引用＋回扣
+- **所有設定即時生效**（主播風格、語音、每步播報、深度），不用重開局
+- TTS 語音直接在瀏覽器播放（開「🔊 語音播報」）；
+  例行步預設靜默，想每步有聲就開「每步都播報」
+
+**API**：`POST /api/new`（開局）、`POST /api/move`（走棋，回傳新局面＋解說＋語音）、
+`POST /api/opts`（即時改設定）、`GET /api/state`、`GET /api/pieces`
 
 （舊版 Streamlit 介面仍在：`streamlit run play.py`）
 
@@ -124,13 +141,18 @@ python3 demo_cli.py   # critical/deep 步驟自動用 GPT 生成播報
 ```
 config.py                  # 門檻、模型、Stockfish 路徑（最常調的就是嚴重度門檻）
 pipeline.py                # 初版的循序驅動（process_move / run_game）
-demo_cli.py / app.py       # CLI 與 Streamlit 入口
+demo_cli.py / app.py       # CLI 與 Streamlit 重播入口
+server.py                  # 對弈模式後端（FastAPI，包同一條管線）
+web/index.html             # 棋訊直播間前端（單檔 HTML/CSS/JS）
+play.py                    # 對弈模式舊版（Streamlit）
+tts.py                     # OpenAI TTS（per-speaker 聲線、register 語氣）
 engine/stockfish_client.py # UCI 封裝（含 mock fallback）
 engine/chess_utils.py      # material、phase、fork、en-prise
 graph/state.py             # 資料結構
 graph/nodes/               # perception / event_detector / director / memory / booth
 graph/build_graph.py       # LangGraph 版（M2+ 切換用）
 personas/personas.py       # 三種風格 + 接地鐵則
+tools/                     # severity_report（門檻校準）、ablation（消融實驗）
 ```
 
 ## 最先該調的東西
