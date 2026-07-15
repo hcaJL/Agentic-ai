@@ -348,6 +348,27 @@ def _worker():
 threading.Thread(target=_worker, daemon=True).start()
 
 
+def _warmup():
+    """First call to a fresh API connection (TLS handshake, connection pool,
+    provider-side cold start) tends to cost ~1s extra — fire one throwaway
+    call to each provider at boot so that cost lands here, not on the first
+    real move of the first game."""
+    try:
+        if config.USE_LLM:
+            from langchain_openai import ChatOpenAI
+            ChatOpenAI(model=config.LIGHT_MODEL, max_tokens=5).invoke("hi")
+    except Exception:
+        pass
+    try:
+        if config.FISHAUDIO_API_KEY:
+            tts.speak("嗨", "play_by_play", 0.2, "calm")
+    except Exception:
+        pass
+
+
+threading.Thread(target=_warmup, daemon=True).start()
+
+
 # ── API ────────────────────────────────────────────────────────────────────────
 class NewGameReq(BaseModel):
     vs_engine: bool = True
