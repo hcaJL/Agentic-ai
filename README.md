@@ -21,12 +21,20 @@
 - ✅ ChromaDB 分層記憶第 2 層（棋理檢索，語料在 `memory/theory_seed.py`；沒裝 chromadb 時自動退回關鍵字比對）
 - ✅ 三層消融 harness（`tools/ablation.py`，baseline / rag / full 對照＋盲評，報告在 `eval_out/`）
 - ✅ LangGraph 化（裝了 `langgraph` 自動走圖，沒裝退回 sequential；Director 路由是圖上真正的 conditional edge）
-- ✅ TTS 語音（OpenAI TTS，`tts.py`；兩位主播不同聲線，語氣跟著 register 強度走）
+- ✅ TTS 語音（`tts.py`；Fish Audio 為主（三種 persona 各配一組台灣腔聲音對，語速/temperature
+  跟著 register 強度走），失敗或沒 key 時退回 edge-tts（本地/免費），永不啞掉）
 - ✅ 對弈模式 Web 版「棋訊直播間」（FastAPI + 自訂前端，見下節）
 - ✅ **排程式非同步播報**：走子 0.07s 返回、SSE 逐句推送、critical 插話、
   積壓打包成「剛剛…」回顧、過時語音按重要性丟棄（見下節架構圖）
 - ✅ **對話式雙主播**：一次生成接話劇本（podcast 式），閒聊 session 帶記憶、
   冷場自動填補、可被任何真實事件切斷
+- ✅ **賽後收官播報**：將殺／逼和／和棋時，兩位主播用整場 `said_so_far` 關鍵時刻
+  做一段簡短總結收尾（`generate_closing`），不是只停在最後一步
+- ✅ **棋盤外框座標**：a–h／1–8 跟著 orientation 走，王車易位／過路兵等多格移動
+  的高亮也一併修正（原本只標國王移動的那兩格）
+- ✅ **修掉 Stockfish 併發崩潰**：即時對局的引擎選棋 + 播報 worker 的逐步分析
+  原本共用一條 Stockfish 連線，兩邊搶著送指令會讓對方的分析被取消（引擎因此
+  常常「不下棋」）；現在拆成兩條獨立連線，並在 `StockfishClient` 內加鎖保護
 - ⬜ 投機準備（對手思考時預生成候選步反應，Phase D）
 - ⬜ 棋手風格檔（分層記憶第 3 層，stretch）
 
@@ -89,9 +97,11 @@ graph TD
    第一句強制用打斷式驚嘆開場
 2. **接地鐵則不變**：劇本只能引用 FactsPacket 裡的事實（引擎評估、事件、
    記憶回扣、棋理檢索），不可捏造
-3. **逐句 TTS**（`tts.py`）：兩位角色不同聲線（nova / onyx），
-   每句的語氣 instructions 由 Director 的 register 強度推導——
-   平靜旁白 → 專業起伏 → 情緒沸騰三檔
+3. **逐句 TTS**（`tts.py`）：Fish Audio 為主（三種 persona 各配一組台灣腔聲音對，
+   `config.FISHAUDIO_VOICES`），沒 key 或呼叫失敗時退回 edge-tts；
+   每句的語速／temperature 由 persona + Director 的 register 強度共同推導——
+   平靜旁白 → 專業起伏 → 情緒沸騰三檔。多句劇本會平行送出合成請求
+   （`_speak_stream`），逐句就緒逐句推送，不用等最慢那句
 4. **閒聊有記憶**（`generate_filler` + worker 的 `chat_log`）：
    每批閒聊都帶著「剛才聊過什麼」（含正式播報的內容）去生成，
    指示「接著聊、不重複、可換角度」；素材只用真實資料——最近棋步、
@@ -157,9 +167,14 @@ OPENAI_API_KEY=sk-proj-你的key填這裡
 
 # 下載 Stockfish 後把路徑填進來（不填就用 mock 引擎）
 # STOCKFISH_PATH=/path/to/stockfish
+
+# TTS 語音（選填）：不填就退回 edge-tts（本地/免費，不需要 key）
+# 去 https://fish.audio 申請，兩個字都要大寫的 KEY 名稱
+FISHAUDIO_API_KEY=你的fish-audio-key填這裡
 ```
 
-> **注意**：API key 請從 https://platform.openai.com/api-keys 取得，不要貼在程式碼或 git 裡。
+> **注意**：API key 請從對應平台的官網取得（OpenAI: https://platform.openai.com/api-keys ；
+> Fish Audio: https://fish.audio），不要貼在程式碼或 git 裡。
 
 ### 3) Phase 0 — 離線跑通（不需要 Stockfish 或 API key）
 
@@ -204,7 +219,9 @@ python3 demo_cli.py   # critical/deep 步驟自動用 GPT 生成播報
 ## 結構
 
 ```
-config.py                  # 門檻、模型、Stockfish 路徑（最常調的就是嚴重度門檻）
+config.py                  # 門檻、模型、Stockfish 路徑、TTS 聲音設定（最常調的就是嚴重度門檻）
+                           #   （FISHAUDIO_VOICES：三種 persona 各一組台灣腔聲音對，
+                           #     reference_id 從 fish.audio 的 /m/<hex>/ 網址取得）
 pipeline.py                # 初版的循序驅動（process_move / run_game）
 demo_cli.py / app.py       # CLI 與 Streamlit 重播入口
 server.py                  # 對弈模式後端：FastAPI + 播報 worker 執行緒 + SSE 推送
@@ -212,7 +229,7 @@ server.py                  # 對弈模式後端：FastAPI + 播報 worker 執行
 web/index.html             # 棋訊直播間前端（單檔 HTML/CSS/JS）
                            #   （AudioQ 音訊佇列：flush 插話、按重要性丟過時語音、冷場觸發閒聊）
 play.py                    # 對弈模式舊版（Streamlit）
-tts.py                     # OpenAI TTS（per-speaker 聲線、register 語氣）
+tts.py                     # Fish Audio 為主、edge-tts 為備援（per-persona 聲音對、register 語氣）
 engine/stockfish_client.py # UCI 封裝（含 mock fallback）
 engine/chess_utils.py      # material、phase、fork、en-prise
 graph/state.py             # 資料結構

@@ -1,7 +1,7 @@
 """Commentary booth. Builds the FactsPacket and generates grounded commentary.
 
-Runs OFFLINE out of the box (templated grounded text). Set ANTHROPIC_API_KEY and
-`pip install langchain-anthropic` to switch to real LLM commentary.
+Runs OFFLINE out of the box (templated grounded text). Set OPENAI_API_KEY
+to switch to real LLM commentary.
 """
 import chess
 import config
@@ -41,10 +41,17 @@ def build_facts(state: dict, persona: str) -> dict:
             "material_balance": state["_material"],
             "phase": ev["phase"],
         },
+        # score_cp/delta_cp are sentinel ±10000 when mate_in is set (see
+        # stockfish_client._to_cp) — that's not a real centipawn/material value,
+        # so it's dropped here to stop the LLM narrating "lost 9000+ material"
         "eval": {
-            "score_cp": a["score_cp"],
-            "delta_cp": a["delta_cp"],
+            "score_cp": a["score_cp"] if a["mate_in"] is None else None,
+            "delta_cp": a["delta_cp"] if a["mate_in"] is None else None,
             "mate_in": a["mate_in"],
+            "mate_note": (f"engine sees forced mate in {abs(a['mate_in'])} move(s) for "
+                          f"{'white' if a['mate_in'] > 0 else 'black'} — describe this as "
+                          "a forced-mate sequence, NEVER as a material/point count"
+                          if a["mate_in"] is not None else None),
             "best_line_san": a["best_line_san"],
             "top_moves": a["top_moves"],
         },
@@ -90,13 +97,19 @@ def _template(facts: dict, speaker: str) -> str:
     if speaker == "analyst":
         if e["best_line_san"]:
             bits.append("引擎建議續法：" + " ".join(e["best_line_san"][:4]))
-        bits.append(f"評估 {e['score_cp']/100:+.1f}")
+        if e["mate_in"] is not None:
+            bits.append(f"偵測到強制將死（{abs(e['mate_in'])} 步內）")
+        else:
+            bits.append(f"評估 {e['score_cp']/100:+.1f}")
         if facts["memory"]["theory"]:
             bits.append("（理論：" + facts["memory"]["theory"][0] + "）")
     else:
         if m["is_check"]:
             bits.append("將軍！")
-        bits.append(f"評估變化 {e['delta_cp']/100:+.1f}")
+        if e["mate_in"] is not None:
+            bits.append("已進入強制將死序列")
+        else:
+            bits.append(f"評估變化 {e['delta_cp']/100:+.1f}")
     return " ".join(bits)
 
 
@@ -168,6 +181,54 @@ def generate_recap(key_facts: dict, batch_moves: list[dict],
         f"規則：共 {n_turns} 句，兩人交替接話；用回顧口吻開場"
         "（例如「剛剛這幾步…」「趁現在補一下，剛才那步…」）；"
         f"把重點放在 {key_san}，其他步一句帶過或不提；每句短（15-45字）、口語。\n"
+        '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+    )
+    try:
+        raw = llm.invoke(msg).content.strip()
+        m = _re.search(r"\[.*\]", raw, _re.S)
+        turns = _json.loads(m.group(0) if m else raw)
+        return [{"speaker": t["speaker"], "text": t["text"].strip()}
+                for t in turns
+                if t.get("speaker") in ("play_by_play", "analyst")
+                and t.get("text", "").strip()]
+    except Exception:
+        return []
+
+
+def generate_closing(state: dict, persona: str) -> list[dict]:
+    """Post-game sign-off: the booth wraps up once the game actually ends
+    (checkmate/stalemate/draw) with a short retrospective over the whole
+    game, not just the final move. Draws on said_so_far — the running list
+    of every non-routine moment recorded across the game.
+    Returns [] on failure/no LLM (caller then stays silent)."""
+    if not config.USE_LLM:
+        return []
+    import json as _json
+    import re as _re
+    from langchain_openai import ChatOpenAI
+    board: chess.Board = state["board"]
+    result = board.result()
+    if board.is_checkmate():
+        ending = "將殺"
+        winner = "黑方" if board.turn else "白方"   # side to move is the one just mated
+    elif board.is_stalemate():
+        ending, winner = "逼和", None
+    else:
+        ending, winner = "和棋", None
+    highlights = state.get("said_so_far", [])[-6:]
+    intensity = 0.9 if board.is_checkmate() else 0.4
+    llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=320)
+    sys = persona_prompt(persona, intensity)
+    msg = (
+        f"{sys}\n"
+        "對局剛剛結束，你們兩位播報員要做個簡短的「賽後總結」為這場對局收尾"
+        "（這是最後一段話，不是在播下一步）。\n"
+        f"結果：{result}（{ending}"
+        + (f"，{winner}獲勝" if winner else "") + f"）\n"
+        f"整場比賽依序的關鍵時刻：{highlights}\n"
+        "規則：共 2-3 句，兩人交替；用總結收尾的口吻開場"
+        "（例如「這場對局…」「回顧整盤棋…」）；可以點名 1-2 個真正關鍵的時刻；"
+        "只能引用上面的事實，不可捏造細節；每句短（15-45字）、口語。\n"
         '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
     )
     try:
@@ -265,9 +326,17 @@ def light_commentary_node(state: dict, persona: str) -> dict:
 def booth_node(state: dict, persona: str) -> dict:
     facts = build_facts(state, persona)
     state["facts"] = facts
-    # deep path = critical moment: always worth commenting, even when the
-    # worker is behind — real commentators circle back to the big moves
+    # in a batch (worker behind), the caller discards this and speaks via
+    # generate_recap instead — so generating a full dialogue here per critical
+    # move would be pure waste: one extra LLM round-trip (~2-5s) for EVERY
+    # critical move in the batch, which is exactly what was making the booth
+    # fall further behind on a tactically sharp sequence. Only pay for it
+    # when this is a solo (real-time) move that will actually be spoken.
+    skip = state.get("skip_generation", False)
     state["skip_generation"] = False
+    if skip:
+        state["commentary"] = []
+        return state
     if config.USE_LLM:
         try:
             state["commentary"] = _dialogue_generate(

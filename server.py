@@ -13,7 +13,10 @@
 import base64
 import json
 import queue
+import random
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import chess
 import chess.svg
@@ -26,14 +29,20 @@ from pathlib import Path
 import config
 import tts
 from engine.stockfish_client import StockfishClient
-from graph.nodes.booth import generate_filler, generate_recap
+from graph.nodes.booth import generate_closing, generate_filler, generate_recap
 from pipeline import make_stepper
 
 app = FastAPI(title="Chess Broadcaster")
 
 WEB_DIR = Path(__file__).parent / "web"
 
-_engine = StockfishClient()          # python-chess SimpleEngine is thread-safe
+_engine = StockfishClient()          # position analysis for the commentary pipeline (worker thread)
+_opp_engine = StockfishClient()      # move selection for the AI opponent (request thread)
+# Separate engine PROCESSES on purpose: a single shared SimpleEngine serializes
+# every analyse() call behind one lock (see stockfish_client.py), so the worker's
+# per-move eval and the opponent's move-picking would queue behind each other
+# instead of running concurrently — that's what made analysis feel sluggish
+# after the lock was added to stop them from cancelling each other.
 _step, _flow = make_stepper(_engine)
 
 # ── SSE hub ────────────────────────────────────────────────────────────────────
@@ -111,7 +120,7 @@ def _snapshot() -> dict:
                            and board.turn == _engine_color()),
         "feed": GAME["feed"],
         "mock_engine": _engine.mock,
-        "tts_available": config.USE_LLM,
+        "llm_available": config.USE_LLM,   # text generation only — TTS (edge-tts) needs no key
         "flow": _flow,
         "opts": GAME["opts"],
     }
@@ -135,10 +144,32 @@ def _emit(entry: dict):
 
 
 def _speak(text: str, speaker: str, intensity: float, opts: dict):
+    """Returns (base64_audio, format) — format is "wav" or "mp3" depending on
+    which TTS provider served this line — or (None, None)."""
     if not opts.get("tts_on"):
-        return None
-    clip = tts.speak(text, speaker, intensity)
-    return base64.b64encode(clip).decode() if clip else None
+        return None, None
+    result = tts.speak(text, speaker, intensity, opts.get("persona", "calm"))
+    if not result:
+        return None, None
+    clip, fmt = result
+    return base64.b64encode(clip).decode(), fmt
+
+
+def _speak_stream(turns: list[dict], intensity: float, opts: dict):
+    """Synthesize every turn's audio concurrently, yielding (turn, audio, fmt)
+    in script order as each finishes — not after the whole batch completes.
+    All turns start synthesizing immediately, so the first line goes out
+    after ~1 TTS round-trip instead of waiting for the slowest line in a
+    multi-turn critical script (that wait was the main cause of the booth
+    feeling like it starts talking late)."""
+    if not turns:
+        return
+    with ThreadPoolExecutor(max_workers=len(turns)) as pool:
+        futures = [pool.submit(_speak, t["text"], t["speaker"], intensity, opts)
+                   for t in turns]
+        for turn, fut in zip(turns, futures):
+            audio, fmt = fut.result()
+            yield turn, audio, fmt
 
 
 def _worker():
@@ -161,13 +192,12 @@ def _worker():
                 return                        # real work pending / nothing to chat about
             ply = len(pipe["move_history"])
             turns = generate_filler(pipe, opts["persona"], chat_log)
-            for t in turns:
+            for t, audio, fmt in _speak_stream(turns, 0.25, opts):
                 if gid != GAME["id"]:
                     return
-                audio = _speak(t["text"], t["speaker"], 0.25, opts)
                 _emit({"severity": "filler", "route": "filler",
                        "speaker": t["speaker"], "text": t["text"],
-                       "audio": audio, "flush": False, "ply": ply})
+                       "audio": audio, "audio_format": fmt, "flush": False, "ply": ply})
                 chat_log.append(t)
             del chat_log[:-16]
             chatting = bool(turns)
@@ -199,7 +229,12 @@ def _worker():
             pipe["last_move"] = mv
             pipe["persona"] = opts["persona"]
             pipe["skip_generation"] = not solo
-            pipe["dialogue_turns"] = "3-5" if _jobs.empty() else "2-3"
+            # "3-5" turns roughly doubles the LLM's generation time over "2-3"
+            # (~3.9s vs ~1.8s measured) — that's the single biggest lever on
+            # how long it takes before ANY voice comes out after a move, so
+            # real-time (queue-empty) events get the short form too now, not
+            # just backlogged ones.
+            pipe["dialogue_turns"] = "2-3"
             try:
                 pipe = _step(pipe)
             except Exception:
@@ -236,7 +271,27 @@ def _worker():
                        "speaker": None, "text": info["san"],
                        "audio": None, "flush": False, "ply": ply})
 
+        def _announce_closing():
+            """Game just ended (checkmate/stalemate/draw) — sign off with a
+            short whole-game retrospective, independent of whether the final
+            move got its own commentary."""
+            if not pipe["board"].is_game_over():
+                return
+            closing = generate_closing(pipe, opts["persona"])
+            if not closing:
+                return
+            for i, (turn, audio, fmt) in enumerate(_speak_stream(closing, 0.7, opts)):
+                if gid != GAME["id"]:
+                    return
+                _emit({"severity": "critical", "route": "closing",
+                       "speaker": turn["speaker"], "text": turn["text"],
+                       "audio": audio, "audio_format": fmt, "flush": i == 0,
+                       "ply": len(pipe["move_history"])})
+                chat_log.append(turn)
+            del chat_log[:-16]
+
         if not infos:
+            _announce_closing()
             return
 
         last_ply = infos[-1]["ply"]
@@ -246,10 +301,12 @@ def _worker():
             commentary = pipe["commentary"]
             label = infos[0]["severity"]
             if not commentary:
+                _announce_closing()
                 return                        # routine: silence, chatter covers it
         else:
             # recap only worth doing when something non-routine happened
             if _RANK[key["severity"]] == 0 or not key["facts"]:
+                _announce_closing()
                 return
             digest = [{k: v for k, v in i.items()
                        if k in ("san", "by", "severity", "types", "delta_cp")}
@@ -258,20 +315,21 @@ def _worker():
                                         "2-4" if _jobs.empty() else "2")
             label = key["severity"]
             if not commentary:
+                _announce_closing()
                 return
 
         chatting = False
         intensity = key["intensity"] if not solo else pipe.get("register_intensity", 0.2)
         flush = label == "critical"
-        for i, turn in enumerate(commentary):
+        for i, (turn, audio, fmt) in enumerate(_speak_stream(commentary, intensity, opts)):
             if gid != GAME["id"]:
                 return
-            audio = _speak(turn["text"], turn["speaker"], intensity, opts)
             _emit({"severity": label, "route": "recap" if not solo else infos[0]["route"],
                    "speaker": turn["speaker"], "text": turn["text"],
-                   "audio": audio, "flush": flush and i == 0, "ply": last_ply})
+                   "audio": audio, "audio_format": fmt, "flush": flush and i == 0, "ply": last_ply})
             chat_log.append(turn)             # chat continues from what was said
         del chat_log[:-16]
+        _announce_closing()
 
     while True:
         kind, gid, payload = _jobs.get()
@@ -347,7 +405,7 @@ def set_opts(req: OptsReq):
         for k, v in req.model_dump().items():
             if v is not None:
                 GAME["opts"][k] = v
-        return {"opts": GAME["opts"], "tts_available": config.USE_LLM}
+        return {"opts": GAME["opts"], "llm_available": config.USE_LLM}
 
 
 def _push_move(mv: chess.Move, gid: int):
@@ -359,13 +417,22 @@ def _push_move(mv: chess.Move, gid: int):
     _jobs.put(("move", gid, mv.uci()))
 
 
-def _engine_move(gid: int):
+MIN_THINK_S, MAX_THINK_S = 2.0, 3.0   # purely cosmetic pacing — doesn't touch depth/strength
+
+
+def _engine_move(gid: int) -> float:
+    """Pick and push the engine's reply IMMEDIATELY — the worker starts
+    analysing/speaking about it right away. Returns elapsed compute time so
+    the caller can pad the *response* (visual reveal), not the analysis."""
     with _lock:
         board = GAME["board"].copy()
         depth = GAME["opts"]["depth"]
-    mv = _engine.best_move(board, depth)
+    t0 = time.monotonic()
+    mv = _opp_engine.best_move(board, depth)
+    elapsed = time.monotonic() - t0
     if mv:
-        _push_move(mv, gid)
+        _push_move(mv, gid)          # queued for the worker now, not after any pad
+    return elapsed
 
 
 @app.post("/api/move")
@@ -388,7 +455,14 @@ def play_move(req: MoveReq):
     with _lock:
         over = GAME["board"].is_game_over()
     if vs_engine and not over:
-        _engine_move(gid)                     # opponent "thinking" is game time
+        elapsed = _engine_move(gid)
+        # pad only the response, i.e. when the move becomes visible — analysis/
+        # commentary for it was already queued inside _engine_move() and is
+        # running concurrently on the worker thread during this sleep
+        target = random.uniform(MIN_THINK_S, MAX_THINK_S)
+        remaining = target - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
     with _lock:
         return _snapshot()

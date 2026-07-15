@@ -17,6 +17,10 @@ langchain-openai>=0.2
 # Layered memory (M3)
 chromadb>=0.5
 
-# Optional: TTS voice (M5)
+# TTS voice (M5) — Fish Audio primary (set FISHAUDIO_API_KEY), edge-tts fallback
+requests>=2.31
+edge-tts>=7.0
+
+# Other TTS options (not wired in, swap tts.py if you want these instead)
 # elevenlabs>=1.0
 # pyttsx3>=2.90

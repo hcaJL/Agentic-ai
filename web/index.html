@@ -223,6 +223,16 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   border-radius: 4px; overflow: hidden;
   box-shadow: inset 0 0 0 1px rgba(0,0,0,.45);
 }
+/* file (a-h) / rank (1-8) labels in the frame's padding strip */
+.coordFiles, .coordRanks {
+  position: absolute; pointer-events: none; z-index: 6;
+  color: var(--gold-dim); font-size: 10px; font-weight: 700;
+  text-shadow: 0 1px 1px rgba(0,0,0,.5);
+}
+.coordFiles { left: 14px; right: 14px; bottom: 1px; height: 12px; display: flex; }
+.coordFiles span { flex: 1; text-align: center; }
+.coordRanks { top: 14px; bottom: 14px; left: 2px; width: 11px; display: flex; flex-direction: column; }
+.coordRanks span { flex: 1; display: flex; align-items: center; justify-content: center; }
 /* glossy sheen + vignette above the squares */
 #board::after {
   content: ''; position: absolute; inset: 0; z-index: 4;
@@ -424,6 +434,8 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     <div class="arena">
       <div class="evalbar"><div id="evalWhite"></div></div>
       <div class="boardwrap">
+        <div class="coordFiles" id="coordFiles"></div>
+        <div class="coordRanks" id="coordRanks"></div>
         <div id="board">
           <div id="veil"><div class="box"><div class="r" id="veilR"></div><div class="d" id="veilD"></div></div></div>
         </div>
@@ -458,6 +470,8 @@ let sel = null;           // selected square name e.g. 'e2'
 let orientation = 'white';
 let busy = false;
 let sqEls = {}, pieceEls = {};   // square name -> element
+let lastMoveSqs = [];            // every square touched by the last syncPieces diff
+                                  // (castling moves 2 pieces — S.last_move only names the king's)
 
 /* ── helpers ── */
 function sqName(f, r) { return FILES[f] + (r + 1); }
@@ -501,6 +515,13 @@ function placeSquares() {
     el.style.top = y * 12.5 + '%';
   }
   for (const [name, el] of Object.entries(pieceEls)) setPiecePos(el, name);
+  renderCoords();
+}
+function renderCoords() {
+  const files = orientation === 'white' ? [...FILES] : [...FILES].reverse();
+  const ranks = orientation === 'white' ? [8, 7, 6, 5, 4, 3, 2, 1] : [1, 2, 3, 4, 5, 6, 7, 8];
+  $('#coordFiles').innerHTML = files.map(f => `<span>${f}</span>`).join('');
+  $('#coordRanks').innerHTML = ranks.map(r => `<span>${r}</span>`).join('');
 }
 function setPiecePos(el, name) {
   const [x, y] = sqXY(name);
@@ -515,6 +536,8 @@ function syncPieces(fen) {
     if (want[sq] !== el.dataset.sym) removed.push(sq);
   for (const [sq, sym] of Object.entries(want))
     if (!pieceEls[sq] || pieceEls[sq].dataset.sym !== sym) added.push(sq);
+
+  const touched = [];
 
   // pair removed→added with the same symbol → slide animation
   for (const to of [...added]) {
@@ -535,8 +558,9 @@ function syncPieces(fen) {
     pieceEls[to] = el;
     el.dataset.sq = to;
     setPiecePos(el, to);
+    touched.push(from, to);
   }
-  for (const sq of removed) { fadeOut(pieceEls[sq]); delete pieceEls[sq]; }
+  for (const sq of removed) { fadeOut(pieceEls[sq]); delete pieceEls[sq]; touched.push(sq); }
   for (const sq of added) {
     const el = document.createElement('div');
     el.className = 'piece';
@@ -545,14 +569,19 @@ function syncPieces(fen) {
     setPiecePos(el, sq);
     $('#board').appendChild(el);
     pieceEls[sq] = el;
+    touched.push(sq);
   }
+  // a real move touches at most 4 squares (castling); a bigger diff means this
+  // was a full-board resync (initial load / new game) — clear any stale highlight
+  // from a previous game instead of treating the whole board as "just moved"
+  if (touched.length > 4) lastMoveSqs = [];
+  else if (touched.length) lastMoveSqs = touched;
 }
 function fadeOut(el) { el.classList.add('fade'); setTimeout(() => el.remove(), 200); }
 
 /* ── highlights ── */
 function paint() {
-  const last = S?.last_move;
-  const lastSqs = last ? [last.slice(0, 2), last.slice(2, 4)] : [];
+  const lastSqs = lastMoveSqs;   // from the last syncPieces diff — covers castling's rook, e.p.'s pawn
   const dests = new Set(), caps = new Set();
   if (sel && S) {
     const pos = parseFen(S.fen);
@@ -632,8 +661,8 @@ function renderMeta() {
   const notes = [];
   if (S.mock_engine)
     notes.push('MOCK 引擎：評估恆為 0。設定 STOCKFISH_PATH 取得真實對弈。');
-  if (!S.tts_available)
-    notes.push('未設定 OPENAI_API_KEY：語音與 LLM 解說停用，退回模板文字。');
+  if (!S.llm_available)
+    notes.push('未設定 OPENAI_API_KEY：LLM 解說停用，退回模板文字（語音仍可用）。');
   $('#engineNote').style.display = notes.length ? 'block' : 'none';
   $('#engineNote').textContent = notes.join(' ');
 }
@@ -641,9 +670,9 @@ function renderMeta() {
 /* ── audio queue: utterances play in order; flush = barge-in ── */
 const AudioQ = {
   q: [], cur: null, lastEnd: Date.now(),
-  enqueue(b64, flush, sev, ply) {
+  enqueue(b64, flush, sev, ply, fmt) {
     if (flush) this.flush();
-    this.q.push({ b64, sev, ply });
+    this.q.push({ b64, sev, ply, fmt: fmt || 'mp3' });
     this.pump();
   },
   flush() {
@@ -664,7 +693,7 @@ const AudioQ = {
   pump() {
     if (this.cur || !this.q.length) return;
     const item = this.q.shift();
-    const a = new Audio('data:audio/mp3;base64,' + item.b64);
+    const a = new Audio(`data:audio/${item.fmt};base64,` + item.b64);
     this.cur = a;
     const done = () => { this.cur = null; this.lastEnd = Date.now(); this.pump(); };
     a.onended = done; a.onerror = done;
@@ -676,7 +705,7 @@ const AudioQ = {
   idleMs() { return (this.cur || this.q.length) ? 0 : Date.now() - this.lastEnd; },
 };
 
-function playB64(b64) { AudioQ.enqueue(b64, true, 'replay'); }
+function playB64(b64, fmt) { AudioQ.enqueue(b64, true, 'replay', undefined, fmt); }
 
 function addFeedEntry(e, live) {
   const feed = $('#feed');
@@ -692,15 +721,17 @@ function addFeedEntry(e, live) {
     el.className = 'card ' + e.severity;
     const name = SPEAKER_NAME[e.speaker] || e.speaker;
     const icon = e.severity === 'filler' ? '💬' : (SPEAKER_ICON[e.speaker] || '💬');
-    const route = e.severity === 'filler' ? '閒聊' : e.route.toUpperCase();
+    const route = e.severity === 'filler' ? '閒聊'
+                : e.route === 'closing' ? '收官'
+                : e.route.toUpperCase();
     el.innerHTML =
       `<div class="who">${icon} ${name} · ${route}` +
       (e.audio ? `<button class="playbtn" title="重播語音">▶</button>` : '') +
       `</div><div class="txt"></div>`;
     el.querySelector('.txt').textContent = e.text;
     if (e.audio) {
-      el.querySelector('.playbtn').onclick = () => playB64(e.audio);
-      if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity, e.ply);
+      el.querySelector('.playbtn').onclick = () => playB64(e.audio, e.audio_format);
+      if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity, e.ply, e.audio_format);
     }
   }
   feed.prepend(el);

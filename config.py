@@ -25,6 +25,21 @@ DEEP_MODEL = "gpt-4o"         # critical moves: strong
 # --- Register intensity by severity label (tone is derived, not user-picked) ---
 INTENSITY = {"routine": 0.2, "notable": 0.55, "critical": 0.9}
 
-# --- TTS (M5). Uses the same OPENAI_API_KEY; delivery follows register intensity. ---
-TTS_MODEL = "gpt-4o-mini-tts"
-TTS_VOICES = {"play_by_play": "nova", "analyst": "onyx"}
+# --- TTS (M5). Fish Audio is primary (set FISHAUDIO_API_KEY) — a distinct
+# voice PAIR per persona (not just per speaker role), from the community
+# voice library; falls back to edge-tts (local/free, no key) when unset or a
+# call fails. Only 3 confirmed-Taiwan-accent voices found with a clear
+# distinct character (2 male, 1 female) — "文藝" reuses the energetic female
+# with much slower/calmer prosody rather than an unverified 4th voice; swap
+# in a better reference_id if you find one you like more (fish.audio voice
+# library, reference_id is the hex in the /m/<hex>/ URL). ---
+FISHAUDIO_API_KEY = os.environ.get("FISHAUDIO_API_KEY")
+FISHAUDIO_VOICES = {
+    "calm": {"play_by_play": "d4494d578101483795e7e6b9d6b4810e",   # 台灣年輕高個男子：clear/measured/warm, confirmed Taiwan accent (user-picked)
+             "analyst": "2d16cee8017e4ff2b2977790344b5abd"},       # 台灣女生：calm/clear/professional, confirmed Taiwan accent (user-picked)
+    "excited": {"play_by_play": "b70857799ddc4a1981c616e631c8e225",  # 台湾女：energetic/announcer
+                "analyst": "502da0830fef4ba9ab3c203ffe929819"},     # 台：high-energy sports/gaming announcer (user-picked)
+    "literary": {"play_by_play": "f6d2bc657fc74343bac02327e7f5e1cd",  # 台灣男：warm/professional (moved here from 熱血)
+                 "analyst": "c82f963136f34bccab7108e341061acc"},     # 台湾女：sweet/gentle, confirmed Taiwan accent (user-picked)
+}
+TTS_VOICES = {"play_by_play": "zh-TW-YunJheNeural", "analyst": "zh-TW-HsiaoChenNeural"}
