@@ -311,8 +311,11 @@ def _worker():
             digest = [{k: v for k, v in i.items()
                        if k in ("san", "by", "severity", "types", "delta_cp")}
                       for i in infos]
-            commentary = generate_recap(key["facts"], digest,
-                                        "2-4" if _jobs.empty() else "2")
+            # always the short form now — "2-4" measured ~3.6s vs "2-3"'s ~1.8s,
+            # and a caught-up queue doesn't make the wait for text+audio to
+            # appear together feel any shorter, so there's no reason to use
+            # the slower one just because the backlog happens to be clear
+            commentary = generate_recap(key["facts"], digest, "2-3")
             label = key["severity"]
             if not commentary:
                 _announce_closing()
