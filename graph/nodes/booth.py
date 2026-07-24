@@ -88,6 +88,36 @@ def _llm_generate(facts: dict, speaker: str) -> str:
     return llm.invoke(msg).content.strip()
 
 
+def _qual_score(score_cp: float | None) -> str:
+    """Qualitative read of the overall (white-POV) evaluation — viewers don't
+    need the raw centipawn number, just who's better and by how much."""
+    if score_cp is None:
+        return "局勢不明朗"
+    side = "白方" if score_cp >= 0 else "黑方"
+    mag = abs(score_cp)
+    if mag < config.DELTA_NOTABLE:
+        return "雙方大致均勢"
+    if mag < config.DELTA_CRITICAL:
+        return f"{side}稍佔優勢"
+    if mag < config.BLUNDER_DROP * 2:
+        return f"{side}優勢明顯"
+    return f"{side}大幅領先"
+
+
+def _qual_delta(delta_cp: float | None) -> str:
+    """Qualitative read of this move's swing (mover's own POV) — direction and
+    magnitude only, never the raw number."""
+    if delta_cp is None:
+        return "局勢變化不大"
+    direction = "改善" if delta_cp >= 0 else "轉差"
+    mag = abs(delta_cp)
+    if mag < config.DELTA_NOTABLE:
+        return f"局勢略有{direction}"
+    if mag < config.DELTA_CRITICAL:
+        return f"局勢明顯{direction}"
+    return f"局勢大幅{direction}"
+
+
 def _template(facts: dict, speaker: str) -> str:
     """Offline grounded fallback — proves the grounding contract without an LLM."""
     m, e, ev = facts["move"], facts["eval"], facts["event"]
@@ -100,7 +130,7 @@ def _template(facts: dict, speaker: str) -> str:
         if e["mate_in"] is not None:
             bits.append(f"偵測到強制將死（{abs(e['mate_in'])} 步內）")
         else:
-            bits.append(f"評估 {e['score_cp']/100:+.1f}")
+            bits.append(_qual_score(e["score_cp"]))
         if facts["memory"]["theory"]:
             bits.append("（理論：" + facts["memory"]["theory"][0] + "）")
     else:
@@ -109,7 +139,7 @@ def _template(facts: dict, speaker: str) -> str:
         if e["mate_in"] is not None:
             bits.append("已進入強制將死序列")
         else:
-            bits.append(f"評估變化 {e['delta_cp']/100:+.1f}")
+            bits.append(_qual_delta(e["delta_cp"]))
     return " ".join(bits)
 
 
@@ -313,7 +343,7 @@ def generate_filler(state: dict, persona: str,
     material = {
         "fen": board.fen(),
         "recent_moves": sans[-10:],
-        "eval_cp": a.get("score_cp"),
+        "evaluation": _qual_score(a.get("score_cp")),
         "likely_next": [t.get("san") for t in (a.get("top_moves") or [])[:3]],
         "callbacks": (mem.get("callbacks") or state.get("said_so_far", []))[-3:],
     }
