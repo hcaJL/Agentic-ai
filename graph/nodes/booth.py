@@ -151,10 +151,18 @@ def _dialogue_generate(facts: dict, n_turns: str = "3-5") -> list[dict]:
     import re as _re
     from langchain_openai import ChatOpenAI
     llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=500)
-    sys = persona_prompt(facts["register"]["persona"], facts["register"]["intensity"])
+    persona = facts["register"]["persona"]
     intensity = facts["register"]["intensity"]
-    interject = ("第一句要用打斷式的驚嘆開場（例如「欸等等——」「哇這步！」），"
-                 if intensity >= 0.8 else "")
+    sys = persona_prompt(persona, intensity)
+    if intensity < 0.8:
+        interject = ""
+    elif persona == "calm":
+        # same "this matters" cue as excited's interjection, but without an
+        # exclamation or excited-style wording — otherwise calm gets the
+        # excited persona's hook verbatim on every critical move
+        interject = "第一句可以用簡短的提示語開場（例如「這裡值得停一下」「注意看這步」），語氣仍維持沉穩，不可用驚嘆詞；"
+    else:
+        interject = "第一句要用打斷式的驚嘆開場（例如「欸等等——」「哇這步！」），"
     msg = (
         f"{sys}\n"
         "你要寫一段「兩位棋賽播報員的即時對話」，像真人搭檔接話，不是各自獨白。\n"
