@@ -99,6 +99,22 @@ h1 { font-size: 21px; font-weight: 700; letter-spacing: .06em;
 @keyframes pulse { 0%,100% {opacity:1; box-shadow:0 0 0 0 rgba(224,82,82,.5)}
                    50% {opacity:.55; box-shadow:0 0 0 6px rgba(224,82,82,0)} }
 
+/* ── Volume control ─────────────────────────────────────── */
+.volctl {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border-radius: 24px;
+  border: 1px solid var(--border); background: var(--panel-2);
+}
+.volbtn {
+  border: none; background: none; cursor: pointer;
+  color: var(--muted); font-size: 16px; line-height: 1; padding: 0;
+  width: 20px; flex: none;
+}
+.volbtn:hover { color: var(--gold); }
+#volSlider {
+  width: 90px; accent-color: var(--gold); cursor: pointer;
+}
+
 /* ── Layout ─────────────────────────────────────────────── */
 main {
   display: grid;
@@ -368,6 +384,10 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     <div class="sub">CHESS BROADCAST STUDIO</div>
   </div>
   <div class="onair"><span class="dot"></span>ON AIR</div>
+  <div class="volctl" id="volCtl">
+    <button class="volbtn" id="volBtn" title="靜音 / 取消靜音">🔊</button>
+    <input type="range" id="volSlider" min="0" max="100" value="80" title="音量">
+  </div>
 </header>
 
 <main>
@@ -380,7 +400,6 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
       <div class="pills" id="personaPills">
         <div class="pill on" data-v="calm">沉穩</div>
         <div class="pill" data-v="excited">熱血</div>
-        <div class="pill" data-v="literary">文藝</div>
       </div>
     </div>
 
@@ -694,6 +713,7 @@ const AudioQ = {
     if (this.cur || !this.q.length) return;
     const item = this.q.shift();
     const a = new Audio(`data:audio/${item.fmt};base64,` + item.b64);
+    a.volume = VOLUME;
     this.cur = a;
     const done = () => { this.cur = null; this.lastEnd = Date.now(); this.pump(); };
     a.onended = done; a.onerror = done;
@@ -723,6 +743,7 @@ function addFeedEntry(e, live) {
     const icon = e.severity === 'filler' ? '💬' : (SPEAKER_ICON[e.speaker] || '💬');
     const route = e.severity === 'filler' ? '閒聊'
                 : e.route === 'closing' ? '收官'
+                : e.route === 'opening' ? '開場'
                 : e.route.toUpperCase();
     el.innerHTML =
       `<div class="who">${icon} ${name} · ${route}` +
@@ -904,6 +925,27 @@ pillGroup('#themePills', v => {
   document.querySelectorAll('#themePills .pill').forEach(p =>
     p.classList.toggle('on', p.dataset.v === t));
 })();
+
+/* volume — applies live to whichever clip is currently playing, remembered across visits */
+function volIcon(v) { return v === 0 ? '🔇' : v < 50 ? '🔉' : '🔊'; }
+function setVolume(pct) {
+  VOLUME = Math.max(0, Math.min(100, pct)) / 100;
+  $('#volSlider').value = pct;
+  $('#volBtn').textContent = volIcon(pct);
+  if (AudioQ.cur) AudioQ.cur.volume = VOLUME;
+  localStorage.setItem('volume', pct);
+}
+let VOLUME = 0.8, volBeforeMute = 80;
+(function initVolume() {
+  const saved = localStorage.getItem('volume');
+  setVolume(saved === null ? 80 : +saved);
+})();
+$('#volSlider').addEventListener('input', () => setVolume(+$('#volSlider').value));
+$('#volBtn').addEventListener('click', () => {
+  const cur = +$('#volSlider').value;
+  if (cur > 0) { volBeforeMute = cur; setVolume(0); }
+  else setVolume(volBeforeMute || 80);
+});
 
 $('#btnNew').addEventListener('click', async () => {
   const vsEngine = pillVal('#oppPills') === 'engine';

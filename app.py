@@ -37,7 +37,7 @@ if "engine" not in st.session_state:
 
 st.title("♟️ Agentic 西洋棋主播")
 st.sidebar.caption(f"棋局：{sys.argv[1] if len(sys.argv) >= 2 else '內建 demo'} · 流程：{st.session_state.flow}")
-persona = st.sidebar.radio("主播風格", ["calm", "excited", "literary"], index=0)
+persona = st.sidebar.radio("主播風格", ["calm", "excited"], index=0)
 tts_on = st.sidebar.toggle("🔊 語音播報", value=False, disabled=not config.USE_LLM,
                            help="需要 OPENAI_API_KEY。語氣跟著 register 強度走。")
 if st.session_state.engine.mock:

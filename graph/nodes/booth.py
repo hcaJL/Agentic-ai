@@ -195,6 +195,53 @@ def generate_recap(key_facts: dict, batch_moves: list[dict],
         return []
 
 
+def generate_opening(opts: dict, persona: str) -> list[dict]:
+    """Pre-game welcome: sets the scene before the first move is even made —
+    persona's style, the matchup, and who has which color. Unlike the other
+    generate_* helpers this never returns [] — an opening remark should
+    always play, so a templated welcome covers the no-LLM/failure case
+    instead of falling silent at kickoff."""
+    vs_engine = opts.get("vs_engine", True)
+    matchup = f"人類 vs 引擎（深度 {opts.get('depth', 8)}）" if vs_engine else "雙人對弈"
+    human_side = ("白方" if opts.get("human_is_white", True) else "黑方") if vs_engine else None
+    template = [
+        {"speaker": "play_by_play",
+         "text": f"歡迎回到棋訊直播間！本局是{matchup}"
+                 + (f"，我們這邊執{human_side}" if human_side else "") + "。"},
+        {"speaker": "analyst", "text": "準備開始了，一起關注這盤棋的每一步。"},
+    ]
+    if not config.USE_LLM:
+        return template
+
+    import json as _json
+    import re as _re
+    from langchain_openai import ChatOpenAI
+    setup = {"matchup": matchup, "human_side": human_side}
+    llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=260)
+    sys = persona_prompt(persona, 0.4)
+    msg = (
+        f"{sys}\n"
+        "對局即將開始，你們兩位播報員要做個簡短的「開場白」歡迎觀眾、介紹這場對局"
+        "（這是第一段話，棋還沒下，不可提到任何棋步、評估或局勢）。\n"
+        f"本局設定：{setup}\n"
+        "規則：共 2-3 句，兩人交替；用開場歡迎的口吻開場"
+        "（例如「歡迎回到棋訊直播間」「今天這一局…」）；"
+        "只能引用上面的設定，不可捏造棋步或局勢；每句短（15-40字）、口語。\n"
+        '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+    )
+    try:
+        raw = llm.invoke(msg).content.strip()
+        m = _re.search(r"\[.*\]", raw, _re.S)
+        turns = _json.loads(m.group(0) if m else raw)
+        out = [{"speaker": t["speaker"], "text": t["text"].strip()}
+               for t in turns
+               if t.get("speaker") in ("play_by_play", "analyst")
+               and t.get("text", "").strip()]
+        return out or template
+    except Exception:
+        return template
+
+
 def generate_closing(state: dict, persona: str) -> list[dict]:
     """Post-game sign-off: the booth wraps up once the game actually ends
     (checkmate/stalemate/draw) with a short retrospective over the whole

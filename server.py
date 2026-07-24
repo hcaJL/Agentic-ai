@@ -29,7 +29,7 @@ from pathlib import Path
 import config
 import tts
 from engine.stockfish_client import StockfishClient
-from graph.nodes.booth import generate_closing, generate_filler, generate_recap
+from graph.nodes.booth import generate_closing, generate_filler, generate_opening, generate_recap
 from pipeline import make_stepper
 
 app = FastAPI(title="Chess Broadcaster")
@@ -186,6 +186,18 @@ def _worker():
             return
 
         opts = GAME["opts"]
+
+        if kind == "opening":
+            turns = generate_opening(opts, opts.get("persona", "calm"))
+            for i, (turn, audio, fmt) in enumerate(_speak_stream(turns, 0.4, opts)):
+                if gid != GAME["id"]:
+                    return
+                _emit({"severity": "notable", "route": "opening",
+                       "speaker": turn["speaker"], "text": turn["text"],
+                       "audio": audio, "audio_format": fmt, "flush": i == 0, "ply": 0})
+                chat_log.append(turn)
+            del chat_log[:-16]
+            return
 
         if kind == "filler":
             if not _jobs.empty() or not pipe["move_history"]:
@@ -416,6 +428,7 @@ def new_game(req: NewGameReq):
         gid = GAME["id"]
     _jobs.put(("reset", gid, None))
     publish({"type": "reset"})
+    _jobs.put(("opening", gid, None))
     # engine plays first when the human took black
     if req.vs_engine and not req.human_is_white:
         _engine_move(gid)
