@@ -25,6 +25,15 @@ DEEP_MODEL = "gpt-4o"         # critical moves: strong
 # --- Register intensity by severity label (tone is derived, not user-picked) ---
 INTENSITY = {"routine": 0.2, "notable": 0.55, "critical": 0.9}
 
+# --- LLM sampling. Looser + penalised repetition = more spoken, less "AI".
+# temperature isn't set anywhere by default (falls back to server default ~1.0);
+# the penalties are the real lever against the "every line has the same skeleton"
+# feel. penalties go via model_kwargs so they work across langchain-openai versions. ---
+DIALOGUE_TEMPERATURE = 0.95   # dialogue / recap / closing / filler
+LIGHT_TEMPERATURE = 0.8       # single-line light path: keep info density
+FREQUENCY_PENALTY = 0.3       # discourage word/phrase repetition
+PRESENCE_PENALTY = 0.2        # nudge toward new turns of phrase
+
 # --- TTS (M5). Fish Audio is primary (set FISHAUDIO_API_KEY) — a distinct
 # voice PAIR per persona (not just per speaker role), from the community
 # voice library; falls back to edge-tts (local/free, no key) when unset or a

@@ -29,7 +29,8 @@ from pathlib import Path
 import config
 import tts
 from engine.stockfish_client import StockfishClient
-from graph.nodes.booth import generate_closing, generate_filler, generate_recap
+from graph.nodes.booth import (generate_closing, generate_filler,
+                               generate_opening, generate_recap)
 from pipeline import make_stepper
 
 app = FastAPI(title="Chess Broadcaster")
@@ -143,6 +144,16 @@ def _emit(entry: dict):
     publish({"type": "utterance", **entry})
 
 
+def _feedback_ctx(persona: str, intensity: float, facts: dict | None, san=None) -> dict:
+    """Context the client echoes back with a 👍/👎 so an approved line lands in
+    the right persona bucket with the moment's event tags (see feedback_store)."""
+    ev = (facts or {}).get("event", {})
+    tags = list(ev.get("types", [])) + list(ev.get("motifs", []))
+    if ev.get("severity_label"):
+        tags.append(ev["severity_label"])
+    return {"persona": persona, "intensity": intensity, "tags": tags, "san": san}
+
+
 def _speak(text: str, speaker: str, intensity: float, opts: dict):
     """Returns (base64_audio, format) — format is "wav" or "mp3" depending on
     which TTS provider served this line — or (None, None)."""
@@ -187,16 +198,30 @@ def _worker():
 
         opts = GAME["opts"]
 
+        if kind == "opening":
+            turns = generate_opening(opts["persona"], opts)
+            ctx = _feedback_ctx(opts["persona"], 0.5, None)
+            for t, audio, fmt in _speak_stream(turns, 0.5, opts):
+                if gid != GAME["id"]:
+                    return
+                _emit({"severity": "filler", "route": "opening",
+                       "speaker": t["speaker"], "text": t["text"], "ctx": ctx,
+                       "audio": audio, "audio_format": fmt, "flush": False, "ply": 0})
+                chat_log.append(t)
+            del chat_log[:-16]
+            return
+
         if kind == "filler":
             if not _jobs.empty() or not pipe["move_history"]:
                 return                        # real work pending / nothing to chat about
             ply = len(pipe["move_history"])
             turns = generate_filler(pipe, opts["persona"], chat_log)
+            ctx = _feedback_ctx(opts["persona"], 0.25, None)
             for t, audio, fmt in _speak_stream(turns, 0.25, opts):
                 if gid != GAME["id"]:
                     return
                 _emit({"severity": "filler", "route": "filler",
-                       "speaker": t["speaker"], "text": t["text"],
+                       "speaker": t["speaker"], "text": t["text"], "ctx": ctx,
                        "audio": audio, "audio_format": fmt, "flush": False, "ply": ply})
                 chat_log.append(t)
             del chat_log[:-16]
@@ -280,11 +305,12 @@ def _worker():
             closing = generate_closing(pipe, opts["persona"])
             if not closing:
                 return
+            ctx = _feedback_ctx(opts["persona"], 0.7, None)
             for i, (turn, audio, fmt) in enumerate(_speak_stream(closing, 0.7, opts)):
                 if gid != GAME["id"]:
                     return
                 _emit({"severity": "critical", "route": "closing",
-                       "speaker": turn["speaker"], "text": turn["text"],
+                       "speaker": turn["speaker"], "text": turn["text"], "ctx": ctx,
                        "audio": audio, "audio_format": fmt, "flush": i == 0,
                        "ply": len(pipe["move_history"])})
                 chat_log.append(turn)
@@ -308,9 +334,12 @@ def _worker():
             if _RANK[key["severity"]] == 0 or not key["facts"]:
                 _announce_closing()
                 return
-            digest = [{k: v for k, v in i.items()
-                       if k in ("san", "by", "severity", "types", "delta_cp")}
-                      for i in infos]
+            digest = []
+            for i in infos:
+                d = {k: v for k, v in i.items()
+                     if k in ("san", "by", "severity", "types", "delta_cp")}
+                d["san_spoken"] = (i.get("facts") or {}).get("move", {}).get("san_spoken") or d.get("san")
+                digest.append(d)
             # always the short form now — "2-4" measured ~3.6s vs "2-3"'s ~1.8s,
             # and a caught-up queue doesn't make the wait for text+audio to
             # appear together feel any shorter, so there's no reason to use
@@ -323,12 +352,15 @@ def _worker():
 
         chatting = False
         intensity = key["intensity"] if not solo else pipe.get("register_intensity", 0.2)
+        facts_for_ctx = (pipe.get("facts") if solo else key.get("facts")) or {}
+        ctx = _feedback_ctx(opts["persona"], intensity, facts_for_ctx,
+                            (infos[0] if solo else key)["san"])
         flush = label == "critical"
         for i, (turn, audio, fmt) in enumerate(_speak_stream(commentary, intensity, opts)):
             if gid != GAME["id"]:
                 return
             _emit({"severity": label, "route": "recap" if not solo else infos[0]["route"],
-                   "speaker": turn["speaker"], "text": turn["text"],
+                   "speaker": turn["speaker"], "text": turn["text"], "ctx": ctx,
                    "audio": audio, "audio_format": fmt, "flush": flush and i == 0, "ply": last_ply})
             chat_log.append(turn)             # chat continues from what was said
         del chat_log[:-16]
@@ -388,6 +420,16 @@ class OptsReq(BaseModel):
     depth: int | None = None
 
 
+class FeedbackReq(BaseModel):
+    verdict: str                 # "good" -> keep, "bad" -> remove/don't collect
+    persona: str
+    speaker: str
+    text: str
+    intensity: float = 0.2
+    tags: list[str] = []
+    san: str | None = None
+
+
 @app.get("/")
 def index():
     return FileResponse(WEB_DIR / "index.html")
@@ -416,6 +458,7 @@ def new_game(req: NewGameReq):
         gid = GAME["id"]
     _jobs.put(("reset", gid, None))
     publish({"type": "reset"})
+    _jobs.put(("opening", gid, None))         # short welcome before the first move
     # engine plays first when the human took black
     if req.vs_engine and not req.human_is_white:
         _engine_move(gid)
@@ -490,6 +533,16 @@ def play_move(req: MoveReq):
 
     with _lock:
         return _snapshot()
+
+
+@app.post("/api/feedback")
+def feedback(req: FeedbackReq):
+    """Record a 👍/👎 on one booth line into the user's style profile.
+    good -> keep as an approved few-shot; bad -> remove/don't collect."""
+    from personas import feedback_store
+    count = feedback_store.record(req.verdict, req.persona, req.speaker, req.text,
+                                  req.intensity, req.tags, req.san)
+    return {"ok": count is not None, "count": count}
 
 
 @app.post("/api/filler")

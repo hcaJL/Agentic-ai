@@ -341,6 +341,17 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   color: var(--muted); font-size: 13px; padding: 0 2px;
 }
 .card .playbtn:hover { color: var(--gold); }
+.card .rate { display: flex; gap: 2px; }
+.card .playbtn + .rate { margin-left: 6px; }
+.card .rate:first-child, .card .who > .rate { margin-left: auto; }
+.card .ratebtn {
+  cursor: pointer; border: none; background: none; padding: 0 2px;
+  font-size: 12px; line-height: 1; opacity: .4; filter: grayscale(1);
+  transition: opacity .12s, filter .12s, transform .12s;
+}
+.card .ratebtn:hover { opacity: 1; filter: grayscale(0); transform: scale(1.15); }
+.card .ratebtn.on { opacity: 1; filter: grayscale(0); }
+.card .ratebtn:disabled { cursor: default; }
 .mutedline { font-size: 11.5px; color: #5d6577; padding: 2px 6px;
              font-family: ui-monospace, Consolas, monospace; }
 .feedempty { color: var(--muted); font-size: 13px; text-align: center;
@@ -381,6 +392,8 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
         <div class="pill on" data-v="calm">沉穩</div>
         <div class="pill" data-v="excited">熱血</div>
         <div class="pill" data-v="literary">文藝</div>
+        <div class="pill" data-v="realcast">真人</div>
+        <div class="pill" data-v="personas2">熱血真人</div>
       </div>
     </div>
 
@@ -707,6 +720,28 @@ const AudioQ = {
 
 function playB64(b64, fmt) { AudioQ.enqueue(b64, true, 'replay', undefined, fmt); }
 
+/* ── 角色記錄檔: thumbs a booth line into (or out of) the style profile ── */
+function wireRating(el, e) {
+  const up = el.querySelector('.ratebtn.up');
+  const down = el.querySelector('.ratebtn.down');
+  if (!up || !down) return;
+  const ctx = e.ctx || {};
+  const send = async (verdict, btn, other) => {
+    btn.classList.add('on'); other.classList.remove('on');
+    try {
+      await fetch('/api/feedback', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          verdict, persona: ctx.persona || '', speaker: e.speaker, text: e.text,
+          intensity: ctx.intensity ?? 0.2, tags: ctx.tags || [], san: ctx.san ?? null,
+        }),
+      });
+    } catch (_) { btn.classList.remove('on'); }
+  };
+  up.onclick = () => send('good', up, down);
+  down.onclick = () => send('bad', down, up);
+}
+
 function addFeedEntry(e, live) {
   const feed = $('#feed');
   const empty = feed.querySelector('.feedempty');
@@ -720,19 +755,27 @@ function addFeedEntry(e, live) {
     el = document.createElement('div');
     el.className = 'card ' + e.severity;
     const name = SPEAKER_NAME[e.speaker] || e.speaker;
-    const icon = e.severity === 'filler' ? '💬' : (SPEAKER_ICON[e.speaker] || '💬');
-    const route = e.severity === 'filler' ? '閒聊'
+    const icon = e.route === 'opening' ? '🎬'
+               : e.severity === 'filler' ? '💬'
+               : (SPEAKER_ICON[e.speaker] || '💬');
+    const route = e.route === 'opening' ? '開場'
                 : e.route === 'closing' ? '收官'
+                : e.severity === 'filler' ? '閒聊'
                 : e.route.toUpperCase();
     el.innerHTML =
       `<div class="who">${icon} ${name} · ${route}` +
       (e.audio ? `<button class="playbtn" title="重播語音">▶</button>` : '') +
+      `<span class="rate">` +
+        `<button class="ratebtn up" title="喜歡這種講法（存進風格檔）">👍</button>` +
+        `<button class="ratebtn down" title="不喜歡（從風格檔剔除）">👎</button>` +
+      `</span>` +
       `</div><div class="txt"></div>`;
     el.querySelector('.txt').textContent = e.text;
     if (e.audio) {
       el.querySelector('.playbtn').onclick = () => playB64(e.audio, e.audio_format);
       if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity, e.ply, e.audio_format);
     }
+    wireRating(el, e);
   }
   feed.prepend(el);
   if (live) AudioQ.lastEnd = Math.max(AudioQ.lastEnd, Date.now());

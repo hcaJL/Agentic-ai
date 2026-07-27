@@ -8,6 +8,31 @@ import config
 from personas.personas import persona_prompt
 
 
+# ---------- spoken move names (say「皇后到 c4」, never「Qc4」) ----------
+_PIECE_ZH = {"king": "王", "queen": "皇后", "rook": "城堡",
+             "bishop": "主教", "knight": "馬", "pawn": "兵"}
+
+
+def _san_spoken(san: str, piece_en: str, to_name: str, is_capture: bool,
+                promotion_en: str | None, is_check: bool, is_mate: bool) -> str:
+    """Colloquial Chinese for a move: 皇后到 c4 / 馬吃 f7 / 王翼易位, plus a
+    將軍/將死 suffix. Booth prompts prefer this over the raw SAN symbol."""
+    if san.startswith("O-O-O"):
+        s = "后翼易位（長易位）"
+    elif san.startswith("O-O"):
+        s = "王翼易位（短易位）"
+    else:
+        p = _PIECE_ZH.get(piece_en, piece_en or "")
+        s = f"{p}{'吃' if is_capture else '到'}{to_name}"
+        if promotion_en:
+            s += f"，升變為{_PIECE_ZH.get(promotion_en, promotion_en)}"
+    if is_mate:
+        s += "，將死"
+    elif is_check:
+        s += "，將軍"
+    return s
+
+
 # ---------- FactsPacket assembly ----------
 def build_facts(state: dict, persona: str) -> dict:
     board: chess.Board = state["board"]
@@ -22,12 +47,19 @@ def build_facts(state: dict, persona: str) -> dict:
         victim = before.piece_at(move.to_square)
         captured = chess.piece_name(victim.piece_type) if victim else None
 
+    san = before.san(move)
+    piece_en = chess.piece_name(piece.piece_type) if piece else ""
+    promotion_en = chess.piece_name(move.promotion) if move.promotion else None
+
     return {
         "move": {
-            "san": before.san(move),
+            "san": san,
+            "san_spoken": _san_spoken(san, piece_en, chess.square_name(move.to_square),
+                                      before.is_capture(move), promotion_en,
+                                      board.is_check(), board.is_checkmate()),
             "uci": move.uci(),
             "played_by": "black" if board.turn else "white",  # mover = not side_to_move
-            "piece": chess.piece_name(piece.piece_type) if piece else "",
+            "piece": piece_en,
             "is_capture": before.is_capture(move),
             "captured": captured,
             "is_check": board.is_check(),
@@ -63,6 +95,26 @@ def build_facts(state: dict, persona: str) -> dict:
 
 
 # ---------- generation ----------
+def _make_llm(model: str, max_tokens: int, temperature: float):
+    """ChatOpenAI with looser, repetition-penalised sampling (see config).
+    The penalties are the real lever against the "every line has the same
+    skeleton" feel — they discourage the model reusing words/phrasing."""
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        frequency_penalty=config.FREQUENCY_PENALTY,
+        presence_penalty=config.PRESENCE_PENALTY,
+    )
+
+
+def _event_tags(facts: dict) -> list[str]:
+    """Flatten event types + motifs + severity into few-shot selection tags."""
+    ev = facts.get("event", {})
+    return list(ev.get("types", [])) + list(ev.get("motifs", [])) + [ev.get("severity_label", "")]
+
+
 def _generate(facts: dict, speaker: str) -> str:
     if config.USE_LLM:
         try:
@@ -73,18 +125,18 @@ def _generate(facts: dict, speaker: str) -> str:
 
 
 def _llm_generate(facts: dict, speaker: str) -> str:
-    from langchain_openai import ChatOpenAI
     model = config.DEEP_MODEL if speaker == "analyst" else config.LIGHT_MODEL
-    llm = ChatOpenAI(model=model, max_tokens=200)
-    sys = persona_prompt(facts["register"]["persona"], facts["register"]["intensity"])
+    llm = _make_llm(model, max_tokens=200, temperature=config.LIGHT_TEMPERATURE)
+    sys = persona_prompt(facts["register"]["persona"], facts["register"]["intensity"],
+                         _event_tags(facts))
     if speaker == "analyst":
-        role = ("你是戰略分析師，解釋『為什麼』。"
-                "memory.theory 是檢索到的棋理，若與當前局面相關，自然地融入解說（不相關就忽略）。"
-                "memory.callbacks 是本局先前的關鍵時刻，適合時回扣它們"
-                "（例如「還記得第 N 手的…」），讓解說有整局脈絡。")
+        role = ("你是負責解釋『為什麼』的分析師搭檔。"
+                "memory.theory 若跟眼前局面對得上就自然帶進來，對不上就別提；"
+                "memory.callbacks 是本局先前的關鍵時刻，聊到相關的地方可以回扣一下，"
+                "讓解說有整局的來龍去脈。")
     else:
-        role = "你是即時主播，描述剛發生的事。"
-    msg = (f"{sys}\n{role}\n以下是唯一可用的事實，請用一兩句口語播報：\n{facts}")
+        role = "你是即時主播，把剛發生的事講出來，帶點臨場反應。"
+    msg = f"{sys}\n{role}\n用一兩句口語講，講到的棋步和分數要照下面的事實：\n{facts}"
     return llm.invoke(msg).content.strip()
 
 
@@ -119,26 +171,25 @@ def _dialogue_generate(facts: dict, n_turns: str = "3-5") -> list[dict]:
     Returns [{"speaker": ..., "text": ...}, ...]; raises on failure."""
     import json as _json
     import re as _re
-    from langchain_openai import ChatOpenAI
-    llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=500)
-    sys = persona_prompt(facts["register"]["persona"], facts["register"]["intensity"])
+    llm = _make_llm(config.DEEP_MODEL, max_tokens=500,
+                    temperature=config.DIALOGUE_TEMPERATURE)
     intensity = facts["register"]["intensity"]
-    interject = ("第一句要用打斷式的驚嘆開場（例如「欸等等——」「哇這步！」），"
-                 if intensity >= 0.8 else "")
+    sys = persona_prompt(facts["register"]["persona"], intensity, _event_tags(facts))
+    hype = ("這步很勁爆，主播可以用被畫面嚇到的反應開場，情緒衝出來。\n"
+            if intensity >= 0.8 else "")
     msg = (
         f"{sys}\n"
-        "你要寫一段「兩位棋賽播報員的即時對話」，像真人搭檔接話，不是各自獨白。\n"
-        "角色：play_by_play（主播，描述發生什麼、拋出鉤子）、"
-        "analyst（分析師，接話解釋為什麼、給續法）。\n"
-        f"規則：共 {n_turns} 句，兩人交替；每句短（15-40字），口語、可加語助詞；"
-        "後一句要接前一句的話尾，可以互相附和或反問；"
-        f"{interject}"
-        "不要重複同樣的資訊；"
-        "memory.callbacks 有本局先前關鍵時刻，適合時回扣；"
-        "memory.theory 有棋理，相關才用。\n"
-        "只能使用以下事實，不可捏造評估或棋步：\n"
+        "接下來是你和搭檔的即時對話——像兩個人真的在轉播台上你一句我一句、"
+        "會互相接話、附和、反問，不是各講各的獨白。\n"
+        "play_by_play 是主播，先講發生了什麼、把話拋出去；"
+        "analyst 是分析師，接著講為什麼、之後可能怎麼走。\n"
+        f"{hype}"
+        f"大概 {n_turns} 句上下，長短跟著情緒走、該短就短；別把同一件事講兩遍。\n"
+        "memory.callbacks 是本局先前的關鍵時刻，聊到相關處可以回扣；"
+        "memory.theory 有棋理，對得上再用。\n"
+        "講到的棋步、分數只能照下面的事實，別自己編：\n"
         f"{facts}\n"
-        '輸出 JSON 陣列：[{"speaker":"play_by_play","text":"..."},'
+        '只輸出 JSON 陣列：[{"speaker":"play_by_play","text":"..."},'
         '{"speaker":"analyst","text":"..."}]，不要其他文字。'
     )
     raw = llm.invoke(msg).content.strip()
@@ -166,22 +217,20 @@ def generate_recap(key_facts: dict, batch_moves: list[dict],
         return []
     import json as _json
     import re as _re
-    from langchain_openai import ChatOpenAI
-    llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=420)
     intensity = key_facts["register"]["intensity"]
-    sys = persona_prompt(key_facts["register"]["persona"], intensity)
-    key_san = key_facts["move"]["san"]
+    llm = _make_llm(config.DEEP_MODEL, max_tokens=420,
+                    temperature=config.DIALOGUE_TEMPERATURE)
+    sys = persona_prompt(key_facts["register"]["persona"], intensity, _event_tags(key_facts))
+    key_san = key_facts["move"].get("san_spoken") or key_facts["move"]["san"]
     msg = (
         f"{sys}\n"
-        "你們是兩位棋賽播報員。剛才棋下得很快，你們來不及逐步講解，"
-        "現在要用「回顧補講」的方式一次帶過剛剛的幾步：\n"
+        "剛才棋下得太快，你和搭檔沒能一步步講，現在趁空檔用回顧的口氣一次補講剛剛那幾步。\n"
         f"剛剛依序發生了這些（最後一步是最新局面）：{batch_moves}\n"
-        f"其中最關鍵的一步是 {key_san}，它的完整事實如下（只能引用這些，不可捏造）：\n"
+        f"其中最關鍵的是「{key_san}」，它的完整事實如下（講到就照這個，別編）：\n"
         f"{key_facts}\n"
-        f"規則：共 {n_turns} 句，兩人交替接話；用回顧口吻開場"
-        "（例如「剛剛這幾步…」「趁現在補一下，剛才那步…」）；"
-        f"把重點放在 {key_san}，其他步一句帶過或不提；每句短（15-45字）、口語。\n"
-        '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+        f"用回頭補講的口氣開場，大概 {n_turns} 句、兩人接話；"
+        f"重點擺在「{key_san}」，其他步一句帶過或不提；口語、該短就短。\n"
+        '只輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
     )
     try:
         raw = llm.invoke(msg).content.strip()
@@ -205,7 +254,6 @@ def generate_closing(state: dict, persona: str) -> list[dict]:
         return []
     import json as _json
     import re as _re
-    from langchain_openai import ChatOpenAI
     board: chess.Board = state["board"]
     result = board.result()
     if board.is_checkmate():
@@ -217,19 +265,56 @@ def generate_closing(state: dict, persona: str) -> list[dict]:
         ending, winner = "和棋", None
     highlights = state.get("said_so_far", [])[-6:]
     intensity = 0.9 if board.is_checkmate() else 0.4
-    llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=320)
+    llm = _make_llm(config.DEEP_MODEL, max_tokens=320, temperature=config.DIALOGUE_TEMPERATURE)
     sys = persona_prompt(persona, intensity)
     msg = (
         f"{sys}\n"
-        "對局剛剛結束，你們兩位播報員要做個簡短的「賽後總結」為這場對局收尾"
-        "（這是最後一段話，不是在播下一步）。\n"
+        "對局剛剛結束了，你和搭檔用一小段話為這場棋收尾——這是今天最後一段話，"
+        "不是在播下一步。\n"
         f"結果：{result}（{ending}"
         + (f"，{winner}獲勝" if winner else "") + f"）\n"
         f"整場比賽依序的關鍵時刻：{highlights}\n"
-        "規則：共 2-3 句，兩人交替；用總結收尾的口吻開場"
-        "（例如「這場對局…」「回顧整盤棋…」）；可以點名 1-2 個真正關鍵的時刻；"
-        "只能引用上面的事實，不可捏造細節；每句短（15-45字）、口語。\n"
-        '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+        "用收尾、回望整盤的口氣，兩人接話大概 2-3 句；"
+        "可以點名一兩個真正關鍵的時刻；講到的細節照上面的事實、別編；口語、簡短。\n"
+        '只輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+    )
+    try:
+        raw = llm.invoke(msg).content.strip()
+        m = _re.search(r"\[.*\]", raw, _re.S)
+        turns = _json.loads(m.group(0) if m else raw)
+        return [{"speaker": t["speaker"], "text": t["text"].strip()}
+                for t in turns
+                if t.get("speaker") in ("play_by_play", "analyst")
+                and t.get("text", "").strip()]
+    except Exception:
+        return []
+
+
+def generate_opening(persona: str, opts: dict) -> list[dict]:
+    """Pre-game opening banter: a short two-voice welcome before the first move.
+    No FactsPacket yet — pure greeting/hype, only bound to who's playing.
+    Returns [] when no LLM / failure (caller then just stays silent)."""
+    if not config.USE_LLM:
+        return []
+    import json as _json
+    import re as _re
+    vs = opts.get("vs_engine", True)
+    human_white = opts.get("human_is_white", True)
+    if vs:
+        white = "玩家" if human_white else "電腦"
+        black = "電腦" if human_white else "玩家"
+        matchup = f"白方是{white}、黑方是{black}（人機對戰）"
+    else:
+        matchup = "白方對黑方"
+    llm = _make_llm(config.LIGHT_MODEL, max_tokens=200, temperature=config.DIALOGUE_TEMPERATURE)
+    sys = persona_prompt(persona, 0.5)
+    msg = (
+        f"{sys}\n"
+        "一場西洋棋對局即將開始，你和搭檔要來一段簡短的開場白：跟觀眾打個招呼、"
+        f"點出這場是誰對誰（{matchup}），帶一點期待感，然後把場子交給棋盤。\n"
+        "這是開場，棋都還沒下，不要提任何具體棋步或評分。\n"
+        "兩人一來一往、大概 2 句、口語、簡短、有精神。\n"
+        '只輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
     )
     try:
         raw = llm.invoke(msg).content.strip()
@@ -252,7 +337,6 @@ def generate_filler(state: dict, persona: str,
         return []
     import json as _json
     import re as _re
-    from langchain_openai import ChatOpenAI
     board: chess.Board = state["board"]
     a = state.get("analysis") or {}
     mem = state.get("retrieved_memory", {}) or {}
@@ -278,19 +362,17 @@ def generate_filler(state: dict, persona: str,
             "不要重複已講過的觀點；可以深入同一話題，也可以自然換新角度）：\n"
             f"{lines}\n"
         )
-    llm = ChatOpenAI(model=config.LIGHT_MODEL, max_tokens=260)
+    llm = _make_llm(config.LIGHT_MODEL, max_tokens=260, temperature=config.DIALOGUE_TEMPERATURE)
     sys = persona_prompt(persona, 0.25)
     msg = (
         f"{sys}\n"
-        "棋局暫時沒有新動作，你們兩位播報員在轉播空檔自然閒聊，"
-        "像平常聊天一樣有來有往。\n"
+        "棋局暫時沒有新動作，你和搭檔趁空檔隨口聊兩句，像平常聊天一樣有來有往。\n"
         f"{history}"
-        "話題方向（挑還沒聊過的）：局面走向、回扣先前關鍵時刻、"
-        "猜接下來的著法、子力擺位的觀察、與此局面相關的棋理或趣談。\n"
-        "規則：2 句，兩人一來一往；每句短（15-40字）、語氣放鬆口語；"
-        "只能引用以下事實，不可捏造：\n"
+        "可以聊的方向（挑還沒聊過的）：局面走向、回扣先前關鍵時刻、"
+        "猜接下來會怎麼走、子力擺位的觀察、跟這局面有關的棋理或趣談。\n"
+        "兩人一來一往，放鬆口語；講到的棋步和分數照下面的事實、別編：\n"
         f"{material}\n"
-        '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+        '只輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
     )
     try:
         raw = llm.invoke(msg).content.strip()
