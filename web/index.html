@@ -453,6 +453,13 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 
     <button class="newgame" id="btnNew">開 新 對 局</button>
     <div class="note" id="engineNote" style="display:none"></div>
+
+    <hr class="sep">
+    <div class="field">
+      <label>觀戰名局　自動重放＋即時解說</label>
+      <select id="gameSelect" style="width:100%;padding:7px 9px;border-radius:7px;background:var(--panel-2);color:inherit;border:1px solid var(--border);font-size:12.5px;margin-bottom:8px"></select>
+      <button class="newgame" id="btnReplay">▶ 觀 戰 重 放</button>
+    </div>
   </div>
 
   <!-- ── Board ── -->
@@ -668,7 +675,7 @@ function renderMeta() {
       tag.textContent = 'READY';
     }
   }
-  $('#board').classList.toggle('playable', !busy && !S.game_over && !S.engine_to_move);
+  $('#board').classList.toggle('playable', !busy && !S.game_over && !S.engine_to_move && !replayMode());
 
   // eval bar arrives asynchronously over SSE
   renderEval();
@@ -815,6 +822,20 @@ function connectStream() {
       AudioQ.trim(e.ply);           // fires per processed move, even silent ones
       EVAL = e;
       renderEval();
+    } else if (e.type === 'board') {
+      // a move was made by someone other than us (replay auto-play, or the
+      // engine's reply) — follow the board live over SSE
+      if (S) {
+        S.fen = e.fen; S.sans = e.sans || S.sans;
+        S.last_move = e.last_move; S.game_over = e.game_over;
+        S.turn = e.fen.split(' ')[1] === 'w' ? 'white' : 'black';
+      }
+      syncPieces(e.fen);
+      renderMeta();
+    } else if (e.type === 'step_done') {
+      // this move's (or the opening's) commentary is fully generated + emitted;
+      // the replay driver may advance once the audio finishes playing
+      if (replayOn) replayStepReady = true;
     } else if (e.type === 'reset') {
       EVAL = null;
       AudioQ.flush();
@@ -843,17 +864,32 @@ function requestFiller(mode) {
   lastFillerReq = Date.now();
   fetch('/api/filler', { method: 'POST' }).catch(() => {});
 }
+// replay is client-paced: advance once this move's commentary is generated
+// (step_done) AND its audio has played out (AudioQ idle) — no fixed timer, so
+// exciting moves get their full spoken line and quiet moves breeze past.
+let replayOn = false, replayStepReady = false, replayPending = false;
 setInterval(() => {
+  if (replayMode() && replayOn) {
+    if (replayStepReady && !replayPending && AudioQ.idleMs() >= 700) {
+      replayStepReady = false; replayPending = true;
+      fetch('/api/replay/next', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => { replayPending = false; if (d.done) replayOn = false; })
+        .catch(() => { replayPending = false; });
+    }
+    return;                        // no dead-air filler while replaying
+  }
   if (AudioQ.idleMs() >= 5000) requestFiller('idle');
-}, 1000);
+}, 500);
 
 /* ── interactions ── */
+function replayMode() { return !!(S && S.opts && S.opts.mode === 'replay'); }
 function canSelect(sq) {
-  if (!S || busy || S.game_over || S.engine_to_move) return false;
+  if (!S || busy || S.game_over || S.engine_to_move || replayMode()) return false;
   return S.legal_moves.some(m => m.slice(0, 2) === sq);
 }
 function onSquareClick(sq) {
-  if (!S || busy || S.game_over || S.engine_to_move) return;
+  if (!S || busy || S.game_over || S.engine_to_move || replayMode()) return;
   if (!sel) {
     if (canSelect(sq)) { sel = sq; paint(); }
     return;
@@ -990,6 +1026,7 @@ $('#volBtn').addEventListener('click', () => {
 });
 
 $('#btnNew').addEventListener('click', async () => {
+  replayOn = false;                    // leaving replay mode for a live game
   const vsEngine = pillVal('#oppPills') === 'engine';
   const humanWhite = pillVal('#colorPills') === 'white';
   orientation = (!vsEngine || humanWhite) ? 'white' : 'black';
@@ -1010,12 +1047,43 @@ $('#btnNew').addEventListener('click', async () => {
   applySnapshot(await r.json());
 });
 
+/* ── replay: pick a preset real game and auto-play it with live commentary ── */
+async function loadGames() {
+  try {
+    const { games } = await (await fetch('/api/games')).json();
+    $('#gameSelect').innerHTML = games.map(g =>
+      `<option value="${g.file}">${g.white} vs ${g.black}${g.event ? ' — ' + g.event : ''}</option>`
+    ).join('');
+  } catch (_) {}
+}
+async function startReplay() {
+  const pgn = $('#gameSelect').value;
+  if (!pgn) return;
+  sel = null;
+  $('#feed').innerHTML = '<div class="feedempty">名局重放中，主播即時解說…</div>';
+  busy = true; renderMeta?.call?.(null);
+  try {
+    const r = await fetch('/api/replay', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pgn, persona: pillVal('#personaPills'), tts_on: true }),
+    });
+    const data = await r.json();
+    if (data.error) { alert('無法重放：' + data.error); busy = false; return; }
+    busy = false;
+    applySnapshot(data);   // board follows the rest live via SSE 'board' events
+    // arm the client-paced driver; the opening remark's step_done fires move 1
+    replayStepReady = false; replayPending = false; replayOn = true;
+  } catch (e) { console.error(e); busy = false; }
+}
+
 /* ── boot ── */
 (async function boot() {
   PIECES = await (await fetch('/api/pieces')).json();
   buildBoard();
   connectStream();
   await refresh();
+  await loadGames();
+  $('#btnReplay').addEventListener('click', startReplay);
 })();
 </script>
 </body>

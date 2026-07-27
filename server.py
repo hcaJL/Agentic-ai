@@ -19,6 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import chess
+import chess.pgn
 import chess.svg
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, StreamingResponse
@@ -31,7 +32,7 @@ import tts
 from engine.stockfish_client import StockfishClient
 from graph.nodes.booth import (generate_closing, generate_filler,
                                generate_opening, generate_recap)
-from pipeline import make_stepper
+from pipeline import make_stepper, moves_from_pgn
 
 app = FastAPI(title="Chess Broadcaster")
 
@@ -92,11 +93,11 @@ _lock = threading.Lock()
 
 def _default_opts() -> dict:
     return {"vs_engine": True, "human_is_white": True, "depth": 8,
-            "persona": "calm", "tts_on": True}
+            "persona": "calm", "tts_on": True, "mode": "play"}
 
 
 GAME = {"id": 0, "board": chess.Board(), "sans": [], "feed": [],
-        "opts": _default_opts()}
+        "opts": _default_opts(), "replay": None}   # replay = {moves, idx} when replaying
 
 
 def _engine_color() -> chess.Color | None:
@@ -375,6 +376,10 @@ def _worker():
         except Exception:
             import logging
             logging.exception("worker job %s failed", kind)  # never kill the thread
+        # signal the client that this move/opening is fully generated + emitted,
+        # so a client-paced replay knows it can advance once the audio plays out
+        if kind in ("move", "opening") and gid == GAME["id"]:
+            publish({"type": "step_done", "kind": kind, "ply": len(GAME["sans"])})
 
 
 threading.Thread(target=_worker, daemon=True).start()
@@ -455,6 +460,7 @@ def new_game(req: NewGameReq):
         GAME["sans"] = []
         GAME["feed"] = []
         GAME["opts"] = req.model_dump()
+        GAME["replay"] = None                 # leave any prior replay mode
         gid = GAME["id"]
     _jobs.put(("reset", gid, None))
     publish({"type": "reset"})
@@ -464,6 +470,82 @@ def new_game(req: NewGameReq):
         _engine_move(gid)
     with _lock:
         return _snapshot()
+
+
+# ── Replay mode: auto-play a preset real game and let the booth commentate ────
+# The client drives the pace — it calls /api/replay/next once the current move's
+# commentary has finished playing — so the booth never falls behind, moves are
+# never batched/skipped, and there are no long silences from a too-fast timer.
+GAMES_DIR = Path(__file__).parent / "games"
+
+
+class ReplayReq(BaseModel):
+    pgn: str                 # a filename inside games/ (not a path)
+    persona: str = "calm"
+    tts_on: bool = True
+
+
+@app.get("/api/games")
+def games():
+    """List the preset real games available to replay (from games/*.pgn)."""
+    out = []
+    for p in sorted(GAMES_DIR.glob("*.pgn")):
+        try:
+            with open(p) as f:
+                h = chess.pgn.read_headers(f)
+        except Exception:
+            h = None
+        g = dict(h) if h else {}
+        out.append({"file": p.name,
+                    "white": g.get("White") or "?", "black": g.get("Black") or "?",
+                    "event": g.get("Event") or "", "date": g.get("Date") or ""})
+    return {"games": out}
+
+
+@app.post("/api/replay")
+def replay(req: ReplayReq):
+    """Load a preset game into replay mode. The board doesn't advance yet — the
+    client fires /api/replay/next (first move after the opening remark plays,
+    then one per move once its commentary finishes)."""
+    path = GAMES_DIR / Path(req.pgn).name     # basename only — no path traversal
+    if not path.exists():
+        return {"error": "game not found"}
+    try:
+        moves = moves_from_pgn(str(path))
+    except Exception:
+        return {"error": "could not read pgn"}
+    if not moves:
+        return {"error": "empty game"}
+    with _lock:
+        GAME["id"] += 1
+        GAME["board"] = chess.Board()
+        GAME["sans"] = []
+        GAME["feed"] = []
+        GAME["opts"] = {"vs_engine": False, "human_is_white": True, "depth": 8,
+                        "persona": req.persona, "tts_on": req.tts_on, "mode": "replay"}
+        GAME["replay"] = {"moves": moves, "idx": 0}
+        gid = GAME["id"]
+    _jobs.put(("reset", gid, None))
+    publish({"type": "reset"})
+    _jobs.put(("opening", gid, None))         # client fires the first move after this plays
+    with _lock:
+        return _snapshot()
+
+
+@app.post("/api/replay/next")
+def replay_next():
+    """Advance the replay by one move — client-paced, called once the current
+    move's commentary has finished playing. Returns {"done": bool}."""
+    with _lock:
+        gid = GAME["id"]
+        rp = GAME.get("replay")
+        if not rp or rp["idx"] >= len(rp["moves"]):
+            return {"done": True}
+        mv = rp["moves"][rp["idx"]]
+        rp["idx"] += 1
+        done = rp["idx"] >= len(rp["moves"])
+    _push_move(mv, gid)
+    return {"done": done}
 
 
 @app.post("/api/opts")
@@ -476,12 +558,19 @@ def set_opts(req: OptsReq):
 
 
 def _push_move(mv: chess.Move, gid: int):
-    """Advance the live board and queue commentary. Caller holds no lock."""
+    """Advance the live board and queue commentary. Caller holds no lock.
+    Also broadcasts a board update over SSE so viewers who aren't the one
+    making the move (replay mode, or the opponent's reply) see the piece move
+    live without polling."""
     with _lock:
         board: chess.Board = GAME["board"]
         GAME["sans"].append(board.san(mv))
         board.push(mv)
+        snap = {"fen": board.fen(), "sans": list(GAME["sans"]),
+                "last_move": mv.uci(), "ply": len(GAME["sans"]),
+                "game_over": board.is_game_over()}
     _jobs.put(("move", gid, mv.uci()))
+    publish({"type": "board", **snap})
 
 
 MIN_THINK_S, MAX_THINK_S = 2.0, 3.0   # purely cosmetic pacing — doesn't touch depth/strength
