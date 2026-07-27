@@ -45,15 +45,18 @@ _TAG_RULES = {
 # patter is NOT commentary voice, so it gets dropped
 _NOISE = re.compile(
     r"^[\s。，、！？…~—\-]*$|訂閱|按讚|小鈴鐺|下一部影片|謝謝觀看|下期再見|"
-    r"千萬別錯過|迫不期待|購買|網課|上分|積極的影片|深入學習|接下來.*影片")
+    r"千萬別錯過|迫不期待|購買|網課|上分|積極的影片|深入學習|接下來.*影片|"
+    r"後裔|乾貨|相信看完|再也不是問題|對大家的")   # + whisper-garbled 後裔 & promo patter
 # a square coordinate (F3, c4, g5…) — snippets containing one are dropped by
 # default: whisper mangles chess notation ("象g5"→"像G5"), and the move CONTENT
 # is worthless to us anyway (the booth generates its own moves). The gold is the
 # pure-voice phrasing, so we keep those and throw the notation away.
 _COORD = re.compile(r"[a-hA-H][1-8]")
 # unambiguous whole-word transcription fixes (safe — no homophone collateral)
-_SAFE_FIX = {"黑幫": "黑方", "白幫": "白方", "後裔棋兵": "后翼棄兵",
-             "後裔棋": "后翼棄兵", "後翼棋兵": "后翼棄兵",
+# 后翼弃兵这个开局名观众听不懂 → 一律讲成通俗的「這個開局」
+_SAFE_FIX = {"黑幫": "黑方", "白幫": "白方",
+             "後裔棋兵": "這個開局", "後裔棋": "這個開局", "後翼棋兵": "這個開局",
+             "後翼棄兵": "這個開局", "后翼弃兵": "這個開局", "后翼棄兵": "這個開局",
              "白個像": "白格象", "白個象": "白格象", "黑個像": "黑格象"}
 _SPLIT = re.compile(r"[，,。.！!？?、；;：:\s]+")
 # LoL/esports-specific vocab that would be nonsense in chess commentary — used

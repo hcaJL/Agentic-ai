@@ -125,18 +125,28 @@ def _generate(facts: dict, speaker: str) -> str:
 
 
 def _llm_generate(facts: dict, speaker: str) -> str:
-    model = config.DEEP_MODEL if speaker == "analyst" else config.LIGHT_MODEL
-    llm = _make_llm(model, max_tokens=200, temperature=config.LIGHT_TEMPERATURE)
     sys = persona_prompt(facts["register"]["persona"], facts["register"]["intensity"],
                          _event_tags(facts))
     if speaker == "analyst":
+        llm = _make_llm(config.DEEP_MODEL, max_tokens=200, temperature=config.LIGHT_TEMPERATURE)
         role = ("你是負責解釋『為什麼』的分析師搭檔。"
                 "memory.theory 若跟眼前局面對得上就自然帶進來，對不上就別提；"
                 "memory.callbacks 是本局先前的關鍵時刻，聊到相關的地方可以回扣一下，"
                 "讓解說有整局的來龍去脈。")
+        guide = "用一兩句口語講，講到的棋步要照下面的事實："
+        f = facts
     else:
-        role = "你是即時主播，把剛發生的事講出來，帶點臨場反應。"
-    msg = f"{sys}\n{role}\n用一兩句口語講，講到的棋步要照下面的事實：\n{facts}"
+        # light path (single quick call): keep it to ONE short line — just say what
+        # happened, don't analyse or give continuations (that's the analyst's job,
+        # on the deep path). Drop best_line/top_moves from facts so it can't spill
+        # engine continuations into a "light" blurb.
+        llm = _make_llm(config.LIGHT_MODEL, max_tokens=90, temperature=config.LIGHT_TEMPERATURE)
+        role = ("你是即時主播，只用一句話簡短講出剛剛這步發生了什麼、帶點臨場反應就好。"
+                "不要分析為什麼、不要給後續著法或續法建議，那是分析師的事。")
+        guide = "只用一句話、簡短口語，照下面的事實講剛發生的棋步（不要念評估、不要給續法）："
+        f = {**facts, "eval": {k: v for k, v in facts["eval"].items()
+                               if k not in ("best_line_san", "top_moves")}}
+    msg = f"{sys}\n{role}\n{guide}\n{f}"
     return llm.invoke(msg).content.strip()
 
 
