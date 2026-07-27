@@ -136,8 +136,38 @@ def _llm_generate(facts: dict, speaker: str) -> str:
                 "讓解說有整局的來龍去脈。")
     else:
         role = "你是即時主播，把剛發生的事講出來，帶點臨場反應。"
-    msg = f"{sys}\n{role}\n用一兩句口語講，講到的棋步和分數要照下面的事實：\n{facts}"
+    msg = f"{sys}\n{role}\n用一兩句口語講，講到的棋步要照下面的事實：\n{facts}"
     return llm.invoke(msg).content.strip()
+
+
+def _qual_score(score_cp: float | None) -> str:
+    """Qualitative read of the overall (white-POV) evaluation — viewers don't
+    need the raw centipawn number, just who's better and by how much."""
+    if score_cp is None:
+        return "局勢不明朗"
+    side = "白方" if score_cp >= 0 else "黑方"
+    mag = abs(score_cp)
+    if mag < config.DELTA_NOTABLE:
+        return "雙方大致均勢"
+    if mag < config.DELTA_CRITICAL:
+        return f"{side}稍佔優勢"
+    if mag < config.BLUNDER_DROP * 2:
+        return f"{side}優勢明顯"
+    return f"{side}大幅領先"
+
+
+def _qual_delta(delta_cp: float | None) -> str:
+    """Qualitative read of this move's swing (mover's own POV) — direction and
+    magnitude only, never the raw number."""
+    if delta_cp is None:
+        return "局勢變化不大"
+    direction = "改善" if delta_cp >= 0 else "轉差"
+    mag = abs(delta_cp)
+    if mag < config.DELTA_NOTABLE:
+        return f"局勢略有{direction}"
+    if mag < config.DELTA_CRITICAL:
+        return f"局勢明顯{direction}"
+    return f"局勢大幅{direction}"
 
 
 def _template(facts: dict, speaker: str) -> str:
@@ -152,7 +182,7 @@ def _template(facts: dict, speaker: str) -> str:
         if e["mate_in"] is not None:
             bits.append(f"偵測到強制將死（{abs(e['mate_in'])} 步內）")
         else:
-            bits.append(f"評估 {e['score_cp']/100:+.1f}")
+            bits.append(_qual_score(e["score_cp"]))
         if facts["memory"]["theory"]:
             bits.append("（理論：" + facts["memory"]["theory"][0] + "）")
     else:
@@ -161,7 +191,7 @@ def _template(facts: dict, speaker: str) -> str:
         if e["mate_in"] is not None:
             bits.append("已進入強制將死序列")
         else:
-            bits.append(f"評估變化 {e['delta_cp']/100:+.1f}")
+            bits.append(_qual_delta(e["delta_cp"]))
     return " ".join(bits)
 
 
@@ -173,10 +203,18 @@ def _dialogue_generate(facts: dict, n_turns: str = "3-5") -> list[dict]:
     import re as _re
     llm = _make_llm(config.DEEP_MODEL, max_tokens=500,
                     temperature=config.DIALOGUE_TEMPERATURE)
+    persona = facts["register"]["persona"]
     intensity = facts["register"]["intensity"]
-    sys = persona_prompt(facts["register"]["persona"], intensity, _event_tags(facts))
-    hype = ("這步很勁爆，主播可以用被畫面嚇到的反應開場，情緒衝出來。\n"
-            if intensity >= 0.8 else "")
+    sys = persona_prompt(persona, intensity, _event_tags(facts))
+    # critical-move opening cue is persona-aware: calm keeps its composure (no
+    # exclamation), everyone else gets the barge-in hype — otherwise calm gets
+    # the excited persona's hook verbatim on exactly the moves that matter most
+    if intensity < 0.8:
+        hype = ""
+    elif persona == "calm":
+        hype = "第一句可以用簡短的提示語開場（例如「這裡值得停一下」「注意看這步」），語氣仍維持沉穩，不可用驚嘆詞。\n"
+    else:
+        hype = "這步很勁爆，主播可以用被畫面嚇到的反應開場，情緒衝出來。\n"
     msg = (
         f"{sys}\n"
         "接下來是你和搭檔的即時對話——像兩個人真的在轉播台上你一句我一句、"
@@ -187,7 +225,7 @@ def _dialogue_generate(facts: dict, n_turns: str = "3-5") -> list[dict]:
         f"大概 {n_turns} 句上下，長短跟著情緒走、該短就短；別把同一件事講兩遍。\n"
         "memory.callbacks 是本局先前的關鍵時刻，聊到相關處可以回扣；"
         "memory.theory 有棋理，對得上再用。\n"
-        "講到的棋步、分數只能照下面的事實，別自己編：\n"
+        "講到的棋步只能照下面的事實，別自己編：\n"
         f"{facts}\n"
         '只輸出 JSON 陣列：[{"speaker":"play_by_play","text":"..."},'
         '{"speaker":"analyst","text":"..."}]，不要其他文字。'
@@ -244,6 +282,53 @@ def generate_recap(key_facts: dict, batch_moves: list[dict],
         return []
 
 
+def generate_opening(opts: dict, persona: str) -> list[dict]:
+    """Pre-game welcome: sets the scene before the first move is even made —
+    persona's style, the matchup, and who has which color. Unlike the other
+    generate_* helpers this never returns [] — an opening remark should
+    always play, so a templated welcome covers the no-LLM/failure case
+    instead of falling silent at kickoff."""
+    vs_engine = opts.get("vs_engine", True)
+    matchup = f"人類 vs 引擎（深度 {opts.get('depth', 8)}）" if vs_engine else "雙人對弈"
+    human_side = ("白方" if opts.get("human_is_white", True) else "黑方") if vs_engine else None
+    template = [
+        {"speaker": "play_by_play",
+         "text": f"歡迎回到棋訊直播間！本局是{matchup}"
+                 + (f"，我們這邊執{human_side}" if human_side else "") + "。"},
+        {"speaker": "analyst", "text": "準備開始了，一起關注這盤棋的每一步。"},
+    ]
+    if not config.USE_LLM:
+        return template
+
+    import json as _json
+    import re as _re
+    from langchain_openai import ChatOpenAI
+    setup = {"matchup": matchup, "human_side": human_side}
+    llm = ChatOpenAI(model=config.DEEP_MODEL, max_tokens=260)
+    sys = persona_prompt(persona, 0.4)
+    msg = (
+        f"{sys}\n"
+        "對局即將開始，你們兩位播報員要做個簡短的「開場白」歡迎觀眾、介紹這場對局"
+        "（這是第一段話，棋還沒下，不可提到任何棋步、評估或局勢）。\n"
+        f"本局設定：{setup}\n"
+        "規則：共 2-3 句，兩人交替；用開場歡迎的口吻開場"
+        "（例如「歡迎回到棋訊直播間」「今天這一局…」）；"
+        "只能引用上面的設定，不可捏造棋步或局勢；每句短（15-40字）、口語。\n"
+        '輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
+    )
+    try:
+        raw = llm.invoke(msg).content.strip()
+        m = _re.search(r"\[.*\]", raw, _re.S)
+        turns = _json.loads(m.group(0) if m else raw)
+        out = [{"speaker": t["speaker"], "text": t["text"].strip()}
+               for t in turns
+               if t.get("speaker") in ("play_by_play", "analyst")
+               and t.get("text", "").strip()]
+        return out or template
+    except Exception:
+        return template
+
+
 def generate_closing(state: dict, persona: str) -> list[dict]:
     """Post-game sign-off: the booth wraps up once the game actually ends
     (checkmate/stalemate/draw) with a short retrospective over the whole
@@ -290,44 +375,6 @@ def generate_closing(state: dict, persona: str) -> list[dict]:
         return []
 
 
-def generate_opening(persona: str, opts: dict) -> list[dict]:
-    """Pre-game opening banter: a short two-voice welcome before the first move.
-    No FactsPacket yet — pure greeting/hype, only bound to who's playing.
-    Returns [] when no LLM / failure (caller then just stays silent)."""
-    if not config.USE_LLM:
-        return []
-    import json as _json
-    import re as _re
-    vs = opts.get("vs_engine", True)
-    human_white = opts.get("human_is_white", True)
-    if vs:
-        white = "玩家" if human_white else "電腦"
-        black = "電腦" if human_white else "玩家"
-        matchup = f"白方是{white}、黑方是{black}（人機對戰）"
-    else:
-        matchup = "白方對黑方"
-    llm = _make_llm(config.LIGHT_MODEL, max_tokens=200, temperature=config.DIALOGUE_TEMPERATURE)
-    sys = persona_prompt(persona, 0.5)
-    msg = (
-        f"{sys}\n"
-        "一場西洋棋對局即將開始，你和搭檔要來一段簡短的開場白：跟觀眾打個招呼、"
-        f"點出這場是誰對誰（{matchup}），帶一點期待感，然後把場子交給棋盤。\n"
-        "這是開場，棋都還沒下，不要提任何具體棋步或評分。\n"
-        "兩人一來一往、大概 2 句、口語、簡短、有精神。\n"
-        '只輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
-    )
-    try:
-        raw = llm.invoke(msg).content.strip()
-        m = _re.search(r"\[.*\]", raw, _re.S)
-        turns = _json.loads(m.group(0) if m else raw)
-        return [{"speaker": t["speaker"], "text": t["text"].strip()}
-                for t in turns
-                if t.get("speaker") in ("play_by_play", "analyst")
-                and t.get("text", "").strip()]
-    except Exception:
-        return []
-
-
 def generate_filler(state: dict, persona: str,
                     chat_history: list[dict] | None = None) -> list[dict]:
     """Phase C: dead-air chatter — an ongoing conversation, not one-shot rounds.
@@ -350,7 +397,7 @@ def generate_filler(state: dict, persona: str,
     material = {
         "fen": board.fen(),
         "recent_moves": sans[-10:],
-        "eval_cp": a.get("score_cp"),
+        "evaluation": _qual_score(a.get("score_cp")),
         "likely_next": [t.get("san") for t in (a.get("top_moves") or [])[:3]],
         "callbacks": (mem.get("callbacks") or state.get("said_so_far", []))[-3:],
     }
@@ -370,7 +417,7 @@ def generate_filler(state: dict, persona: str,
         f"{history}"
         "可以聊的方向（挑還沒聊過的）：局面走向、回扣先前關鍵時刻、"
         "猜接下來會怎麼走、子力擺位的觀察、跟這局面有關的棋理或趣談。\n"
-        "兩人一來一往，放鬆口語；講到的棋步和分數照下面的事實、別編：\n"
+        "兩人一來一往，放鬆口語；講到的棋步照下面的事實、別編：\n"
         f"{material}\n"
         '只輸出 JSON 陣列：[{"speaker":"play_by_play"或"analyst","text":"..."}]，不要其他文字。'
     )

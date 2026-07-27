@@ -148,7 +148,7 @@ if "engine" not in st.session_state:
 with st.sidebar:
     st.markdown("### ♟️ 對弈設定")
     st.caption(f"流程：{st.session_state.flow}")
-    persona = st.radio("主播風格", ["calm", "excited", "literary"], index=0)
+    persona = st.radio("主播風格", ["calm", "excited"], index=0)
     tts_on  = st.toggle("🔊 語音播報", value=False, disabled=not config.USE_LLM,
                         help="需要 OPENAI_API_KEY")
     verbose = st.toggle("每步都播報", value=False,

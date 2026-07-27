@@ -42,8 +42,10 @@ def update_memory_node(state: dict) -> dict:
     """Write this move's key moment back to short-term memory (for consistency + call-backs)."""
     ev = state["event"]
     if ev["severity_label"] != "routine":
+        from graph.nodes.booth import _qual_score   # local import: avoid a module-load cycle
         a = state["analysis"]
         mv = state["facts"]["move"]["san"] if state.get("facts") else state["last_move"].uci()
-        summary = f"#{state['board'].fullmove_number} {mv}: {'/'.join(ev['types']) or 'notable'} ({a['score_cp']/100:+.1f})"
+        summary = (f"#{state['board'].fullmove_number} {mv}: "
+                   f"{'/'.join(ev['types']) or 'notable'} ({_qual_score(a['score_cp'])})")
         state.setdefault("said_so_far", []).append(summary)
     return state

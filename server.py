@@ -199,15 +199,15 @@ def _worker():
         opts = GAME["opts"]
 
         if kind == "opening":
-            turns = generate_opening(opts["persona"], opts)
-            ctx = _feedback_ctx(opts["persona"], 0.5, None)
-            for t, audio, fmt in _speak_stream(turns, 0.5, opts):
+            turns = generate_opening(opts, opts.get("persona", "calm"))
+            ctx = _feedback_ctx(opts["persona"], 0.4, None)
+            for i, (turn, audio, fmt) in enumerate(_speak_stream(turns, 0.4, opts)):
                 if gid != GAME["id"]:
                     return
-                _emit({"severity": "filler", "route": "opening",
-                       "speaker": t["speaker"], "text": t["text"], "ctx": ctx,
-                       "audio": audio, "audio_format": fmt, "flush": False, "ply": 0})
-                chat_log.append(t)
+                _emit({"severity": "notable", "route": "opening",
+                       "speaker": turn["speaker"], "text": turn["text"], "ctx": ctx,
+                       "audio": audio, "audio_format": fmt, "flush": i == 0, "ply": 0})
+                chat_log.append(turn)
             del chat_log[:-16]
             return
 

@@ -1,5 +1,5 @@
 """TTS voice for the booth (M5). Fish Audio is the primary provider — a
-distinct Taiwan-Mandarin voice PAIR per persona (calm/excited/literary), not
+distinct Taiwan-Mandarin voice PAIR per persona (calm/excited), not
 just per speaker role; speed/temperature follow both the persona and the
 Director's register intensity — same "tone is derived, not user-picked"
 contract as the text side. Falls back to edge-tts (local/free, no key) when
@@ -25,15 +25,14 @@ _PERSONA_PROSODY = {
     "calm": (1.0, 1.0),
     ("calm", "play_by_play"): (1.3, 1.0),
     "excited": (1.0, 1.0),
-    "literary": (1.0, 1.0),
 }
 
 # Temperature ceiling per persona — Fish Audio regenerates from the
 # reference on every call rather than replaying a fixed recording, and high
 # temperature makes that run-to-run drift more audible (the same voice can
-# sound noticeably different call to call at critical's 0.9). All three
-# personas get capped now — "excited" highest since it's meant to stay lively.
-_TEMP_CAP = {"calm": 0.65, "literary": 0.7, "excited": 0.75}
+# sound noticeably different call to call at critical's 0.9). Both personas
+# get capped now — "excited" highest since it's meant to stay lively.
+_TEMP_CAP = {"calm": 0.65, "excited": 0.75}
 
 
 def _fish_prosody(intensity: float, persona: str, speaker: str) -> tuple[float, float]:
