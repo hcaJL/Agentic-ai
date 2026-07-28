@@ -708,14 +708,16 @@ function renderMeta() {
 
 /* ── audio queue: utterances play in order; flush = barge-in ── */
 const AudioQ = {
-  q: [], cur: null, lastEnd: Date.now(),
-  enqueue(b64, flush, sev, ply, fmt) {
+  q: [], cur: null, pending: false, lastEnd: Date.now(),
+  enqueue(b64, flush, sev, ply, fmt, gap) {
     if (flush) this.flush();
-    this.q.push({ b64, sev, ply, fmt: fmt || 'mp3' });
+    this.q.push({ b64, sev, ply, fmt: fmt || 'mp3', gap: gap ? 900 : 0 });
     this.pump();
   },
   flush() {
     this.q = [];
+    if (this.pendingTimer) { clearTimeout(this.pendingTimer); this.pendingTimer = null; }
+    this.pending = false;
     if (this.cur) { try { this.cur.pause(); } catch (e) {} this.cur = null; }
   },
   // staleness tolerance by importance (in plies): chatter about an old
@@ -730,19 +732,26 @@ const AudioQ = {
     });
   },
   pump() {
-    if (this.cur || !this.q.length) return;
+    if (this.cur || this.pending || !this.q.length) return;
     const item = this.q.shift();
-    const a = new Audio(`data:audio/${item.fmt};base64,` + item.b64);
-    a.volume = VOLUME;
-    this.cur = a;
-    const done = () => { this.cur = null; this.lastEnd = Date.now(); this.pump(); };
-    a.onended = done; a.onerror = done;
-    a.play().catch(done);
-    // keep the conversation flowing: while the LAST queued chatter clip is
-    // playing, ask for the next batch so it arrives before the silence
-    if (item.sev === 'filler' && this.q.length === 0) requestFiller('continue');
+    const play = () => {
+      this.pending = false;
+      const a = new Audio(`data:audio/${item.fmt};base64,` + item.b64);
+      a.volume = VOLUME;
+      this.cur = a;
+      const done = () => { this.cur = null; this.lastEnd = Date.now(); this.pump(); };
+      a.onended = done; a.onerror = done;
+      a.play().catch(done);
+      // keep the conversation flowing: while the LAST queued chatter clip is
+      // playing, ask for the next batch so it arrives before the silence
+      if (item.sev === 'filler' && this.q.length === 0) requestFiller('continue');
+    };
+    if (item.gap) {   // a short breath before this clip (e.g. before the sign-off)
+      this.pending = true;
+      this.pendingTimer = setTimeout(play, item.gap);
+    } else play();
   },
-  idleMs() { return (this.cur || this.q.length) ? 0 : Date.now() - this.lastEnd; },
+  idleMs() { return (this.cur || this.pending || this.q.length) ? 0 : Date.now() - this.lastEnd; },
 };
 
 function playB64(b64, fmt) { AudioQ.enqueue(b64, true, 'replay', undefined, fmt); }
@@ -800,7 +809,7 @@ function addFeedEntry(e, live) {
     el.querySelector('.txt').textContent = e.text;
     if (e.audio) {
       el.querySelector('.playbtn').onclick = () => playB64(e.audio, e.audio_format);
-      if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity, e.ply, e.audio_format);
+      if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity, e.ply, e.audio_format, e.gap_before);
     }
     wireRating(el, e);
   }

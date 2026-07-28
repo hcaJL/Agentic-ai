@@ -307,13 +307,17 @@ def _worker():
             if not closing:
                 return
             ctx = _feedback_ctx(opts["persona"], 0.7, None)
+            # NEVER flush here: the sign-off must wait for the final move's
+            # commentary to finish playing, not barge in over it (that was the
+            # "搶話" at the end). flush=False queues it after; gap_before on the
+            # first line gives a short breath before the sign-off starts.
             for i, (turn, audio, fmt) in enumerate(_speak_stream(closing, 0.7, opts)):
                 if gid != GAME["id"]:
                     return
                 _emit({"severity": "critical", "route": "closing",
                        "speaker": turn["speaker"], "text": turn["text"], "ctx": ctx,
-                       "audio": audio, "audio_format": fmt, "flush": i == 0,
-                       "ply": len(pipe["move_history"])})
+                       "audio": audio, "audio_format": fmt, "flush": False,
+                       "gap_before": i == 0, "ply": len(pipe["move_history"])})
                 chat_log.append(turn)
             del chat_log[:-16]
 
