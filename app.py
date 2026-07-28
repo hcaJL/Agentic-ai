@@ -6,8 +6,10 @@
 import sys
 import streamlit as st
 import chess, chess.svg
+import config
+import tts
 from engine.stockfish_client import StockfishClient
-from pipeline import process_move, moves_from_pgn
+from pipeline import make_stepper, moves_from_pgn
 
 st.set_page_config(page_title="Chess Broadcaster", layout="wide")
 
@@ -24,6 +26,7 @@ def san_to_moves(san_list):
 
 if "engine" not in st.session_state:
     st.session_state.engine = StockfishClient()
+    st.session_state.step, st.session_state.flow = make_stepper(st.session_state.engine)
     if len(sys.argv) >= 2:
         st.session_state.moves = moves_from_pgn(sys.argv[1])
     else:
@@ -33,8 +36,10 @@ if "engine" not in st.session_state:
     st.session_state.feed = []
 
 st.title("♟️ Agentic 西洋棋主播")
-st.sidebar.caption(f"棋局：{sys.argv[1] if len(sys.argv) >= 2 else '內建 demo'}")
-persona = st.sidebar.radio("主播風格", ["calm", "excited", "literary"], index=0)
+st.sidebar.caption(f"棋局：{sys.argv[1] if len(sys.argv) >= 2 else '內建 demo'} · 流程：{st.session_state.flow}")
+persona = st.sidebar.radio("主播風格", ["calm", "excited"], index=0)
+tts_on = st.sidebar.toggle("🔊 語音播報", value=False, disabled=not config.USE_LLM,
+                           help="需要 OPENAI_API_KEY。語氣跟著 register 強度走。")
 if st.session_state.engine.mock:
     st.sidebar.warning("MOCK 引擎模式。設定 STOCKFISH_PATH 取得真實評估。")
 
@@ -56,23 +61,48 @@ with col1:
         if len(board.move_stack) == st.session_state.ply:
             mv = st.session_state.moves[st.session_state.ply]
             st.session_state.state["last_move"] = mv
-            st.session_state.state = process_move(st.session_state.state,
-                                                  st.session_state.engine, persona)
+            st.session_state.state["persona"] = persona
+            st.session_state.state = st.session_state.step(st.session_state.state)
+            st.session_state.state["move_history"].append(mv)
             ev = st.session_state.state["event"]
+            if not st.session_state.state["commentary"]:
+                # routine moves are silent by design — still show a muted line so
+                # the feed visibly advances
+                st.session_state.feed.append(
+                    (ev["severity_label"], st.session_state.state["route"], None,
+                     st.session_state.state["analysis"]["played_san"], None))
+            clips = []
             for turn in st.session_state.state["commentary"]:
+                audio = tts.speak(turn["text"], turn["speaker"],
+                                  st.session_state.state.get("register_intensity", 0.2)
+                                  ) if tts_on else None
+                if audio:
+                    clips.append(audio)
                 st.session_state.feed.append(
                     (ev["severity_label"], st.session_state.state["route"],
-                     turn["speaker"], turn["text"]))
+                     turn["speaker"], turn["text"], audio))
+            # one combined clip so the two speakers play in sequence, not on top
+            # of each other
+            st.session_state.new_audio = b"".join(clips) or None
             st.session_state.ply += 1
         st.rerun()
     if c2.button("⟲ 重置", use_container_width=True):
         st.session_state.ply = 0
         st.session_state.state = {"board": chess.Board(), "move_history": [], "said_so_far": []}
         st.session_state.feed = []
+        st.session_state.new_audio = None
         st.rerun()
 
 with col2:
     st.subheader("播報")
-    for label, route, speaker, text in reversed(st.session_state.feed):
+    if st.session_state.get("new_audio"):
+        st.audio(st.session_state.new_audio, format="audio/mp3", autoplay=True)
+        st.session_state.new_audio = None  # autoplay once, not on every rerun
+    for label, route, speaker, text, audio in reversed(st.session_state.feed):
+        if speaker is None:
+            st.caption(f"⚪ {text} ·（例行步，靜默）")
+            continue
         color = {"critical": "🔴", "notable": "🟡", "routine": "⚪"}[label]
         st.markdown(f"{color} **{speaker}** · `{route}`  \n{text}")
+        if audio:
+            st.audio(audio, format="audio/mp3")

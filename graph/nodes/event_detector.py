@@ -38,9 +38,14 @@ def event_detector_node(state: dict) -> dict:
     # --- eval-based ---
     if a["delta_cp"] <= -config.BLUNDER_DROP:
         types.append("blunder")
-    if len(a["top_moves"]) >= 2:
-        gap = abs(a["top_moves"][0]["score_cp"] - a["top_moves"][1]["score_cp"])
-        if gap >= config.BRILLIANT_GAP and a["delta_cp"] >= -30:
+    # brilliant = mover found the only good move among their OWN candidates
+    # (pre-move multipv). Captures are excluded: forced/simple recaptures share
+    # the same signature, and genuinely great captures already fire `sacrifice`.
+    tm_before = a.get("top_moves_before", [])
+    if len(tm_before) >= 2 and cap == 0:
+        gap = abs(tm_before[0]["score_cp"] - tm_before[1]["score_cp"])
+        if (gap >= config.BRILLIANT_GAP and a["delta_cp"] >= -30
+                and a.get("played_san") == tm_before[0]["san"]):
             types.append("brilliant")
     if a["mate_in"] is not None:
         types.append("mate_sequence")
@@ -63,8 +68,8 @@ def event_detector_node(state: dict) -> dict:
 
 
 CRITICAL_EVENTS = {"checkmate", "blunder", "sacrifice", "promotion",
-                   "entering_endgame", "brilliant", "mate_sequence"}
-NOTABLE_EVENTS = {"check", "major_capture"}
+                   "brilliant", "mate_sequence"}
+NOTABLE_EVENTS = {"check", "major_capture", "entering_endgame"}
 
 
 def _severity_score(delta_cp: int, types: list, motifs: list) -> float:

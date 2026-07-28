@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>棋訊直播間 — Chess Broadcast Studio</title>
+<style>
+:root {
+  --bg:        #0d1017;
+  --panel:     #151a24;
+  --panel-2:   #1a2130;
+  --border:    #262e40;
+  --text:      #e8e6e0;
+  --muted:     #8b93a7;
+  --gold:      #d4a94e;
+  --gold-dim:  #a8863d;
+  --red:       #e05252;
+  --sq-light:  #ecdfc8;
+  --sq-dark:   #ae8a68;
+  --sel:       rgba(246, 246, 105, .55);
+  --lastmv:    rgba(212, 169, 78, .38);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background:
+    radial-gradient(1200px 600px at 70% -10%, #1a2233 0%, transparent 60%),
+    radial-gradient(900px 500px at 8% 110%, rgba(212, 169, 78, .055) 0%, transparent 55%),
+    var(--bg);
+  color: var(--text);
+  font-family: "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+/* ── Board themes ──────────────────────────────────────── */
+/* each theme also sets its own move-highlight colors:
+   --sel selected square · --lastmv last move · --hov hover on pickable piece */
+body[data-btheme="wood"] {
+  --sqL1: #f2e3c6; --sqL2: #e9d6af; --sqD1: #b3875f; --sqD2: #9e7148;
+  --fr1: #4d3a26;  --fr2: #35281a;  --fr3: #241a10;
+  --hint: 45, 30, 10;
+  --sel: rgba(246, 246, 105, .55); --lastmv: rgba(212, 169, 78, .38);
+  --hov: rgba(246, 240, 150, .28);
+}
+body[data-btheme="emerald"] {
+  --sqL1: #f0f1da; --sqL2: #e5e8c2; --sqD1: #7f9c56; --sqD2: #6c8b47;
+  --fr1: #33422b;  --fr2: #25311f;  --fr3: #182013;
+  --hint: 16, 30, 12;
+  --sel: rgba(246, 246, 105, .55); --lastmv: rgba(205, 210, 106, .45);
+  --hov: rgba(246, 240, 150, .28);
+}
+body[data-btheme="ocean"] {
+  --sqL1: #e7eef3; --sqL2: #d8e3eb; --sqD1: #82a5be; --sqD2: #6e94af;
+  --fr1: #2b3c50;  --fr2: #1f2c3c;  --fr3: #151e29;
+  --hint: 10, 22, 34;
+  --sel: rgba(255, 220, 90, .5);   --lastmv: rgba(255, 200, 80, .32);
+  --hov: rgba(255, 230, 140, .26);
+}
+body[data-btheme="graphite"] {
+  --sqL1: #d3d7e0; --sqL2: #c5cad6; --sqD1: #71798b; --sqD2: #61697b;
+  --fr1: #353b47;  --fr2: #272c35;  --fr3: #1a1e25;
+  --hint: 12, 15, 22;
+  --sel: rgba(96, 165, 250, .48);  --lastmv: rgba(129, 140, 248, .34);
+  --hov: rgba(140, 190, 255, .26);
+}
+
+/* ── Header ─────────────────────────────────────────────── */
+header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(13, 16, 23, .75);
+  backdrop-filter: blur(10px);
+  position: sticky; top: 0; z-index: 50;
+}
+.logo {
+  width: 42px; height: 42px; border-radius: 10px;
+  background: linear-gradient(145deg, #f4ede0, #cfc4ad);
+  display: grid; place-items: center;
+  font-size: 24px; color: #1a1a1a;
+  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+h1 { font-size: 21px; font-weight: 700; letter-spacing: .06em;
+     font-family: "Noto Serif TC", "PMingLiU", serif; }
+.sub { font-size: 10.5px; color: var(--muted); letter-spacing: .32em; margin-top: 2px; }
+.onair {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 18px; border-radius: 24px;
+  border: 1px solid rgba(224, 82, 82, .45);
+  background: rgba(224, 82, 82, .08);
+  color: var(--red); font-size: 11.5px; font-weight: 700; letter-spacing: .28em;
+}
+.onair .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% {opacity:1; box-shadow:0 0 0 0 rgba(224,82,82,.5)}
+                   50% {opacity:.55; box-shadow:0 0 0 6px rgba(224,82,82,0)} }
+
+/* ── Volume control ─────────────────────────────────────── */
+.volctl {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border-radius: 24px;
+  border: 1px solid var(--border); background: var(--panel-2);
+}
+.volbtn {
+  border: none; background: none; cursor: pointer;
+  color: var(--muted); font-size: 16px; line-height: 1; padding: 0;
+  width: 20px; flex: none;
+}
+.volbtn:hover { color: var(--gold); }
+#volSlider {
+  width: 90px; accent-color: var(--gold); cursor: pointer;
+}
+
+/* ── Layout ─────────────────────────────────────────────── */
+main {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 360px;
+  gap: 20px;
+  padding: 20px 28px;
+  max-width: 1560px;
+  margin: 0 auto;
+}
+@media (max-width: 1180px) { main { grid-template-columns: 250px minmax(0,1fr); }
+                             #feedPanel { grid-column: 1 / -1; } }
+
+.panel {
+  background: linear-gradient(180deg, rgba(255,255,255,.015) 0%, transparent 30%), var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 4px 24px rgba(0,0,0,.25);
+}
+.panel h2 {
+  font-size: 13px; font-weight: 700; letter-spacing: .1em;
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 18px;
+}
+.panel h2 .en { font-size: 9.5px; color: var(--muted); letter-spacing: .28em; }
+
+/* ── Settings ───────────────────────────────────────────── */
+.field { margin-bottom: 18px; }
+.field label { display: block; font-size: 11.5px; color: var(--muted);
+               margin-bottom: 8px; letter-spacing: .08em; }
+.pills { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill {
+  padding: 7px 15px; border-radius: 20px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2);
+  color: var(--text); font-size: 12.5px;
+  transition: all .15s;
+}
+.pill:hover { border-color: var(--gold-dim); }
+.pill.on {
+  background: var(--gold); border-color: var(--gold);
+  color: #14100a; font-weight: 700;
+  box-shadow: 0 2px 10px rgba(212, 169, 78, .3);
+}
+input[type=range] {
+  width: 100%; accent-color: var(--gold); cursor: pointer;
+}
+.depthval { color: var(--gold); font-weight: 700; margin-left: 6px; }
+.newgame {
+  width: 100%; padding: 13px; margin-top: 4px;
+  border: none; border-radius: 10px; cursor: pointer;
+  background: linear-gradient(145deg, #e05252, #c23c3c);
+  color: #fff; font-size: 15px; font-weight: 700; letter-spacing: .3em;
+  font-family: inherit;
+  box-shadow: 0 4px 16px rgba(224, 82, 82, .25);
+  transition: transform .12s, box-shadow .12s;
+}
+.newgame:hover { transform: translateY(-1px);
+                 box-shadow: 0 6px 20px rgba(224, 82, 82, .35); }
+.note {
+  margin-top: 16px; padding: 11px 13px; border-radius: 9px;
+  font-size: 11.5px; line-height: 1.6; color: #c9a86a;
+  background: rgba(212, 169, 78, .07);
+  border: 1px solid rgba(212, 169, 78, .22);
+}
+hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+
+/* ── Center: status + board ─────────────────────────────── */
+#center { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.statusbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px 20px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; font-size: 14.5px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 4px 24px rgba(0,0,0,.25);
+}
+.statusbar .tag { margin-left: auto; font-size: 10px; letter-spacing: .3em;
+                  color: var(--muted); }
+.statusbar.thinking .tag { color: var(--gold); }
+#stTurnDot { width: 13px; height: 13px; border-radius: 50%;
+             border: 2px solid var(--muted); background: #fff; flex: none; }
+#stTurnDot.black { background: #1a1a1a; }
+
+.arena { display: flex; gap: 14px; align-items: stretch; justify-content: center; }
+
+/* eval bar */
+.evalbar {
+  width: 14px; border-radius: 7px; overflow: hidden;
+  background: #23180f; border: 1px solid var(--border);
+  display: flex; flex-direction: column; flex: none;
+}
+#evalWhite {
+  margin-top: auto; width: 100%;
+  background: linear-gradient(180deg, #fdfaf3, #d8d2c2);
+  height: 50%;
+  transition: height .6s cubic-bezier(.4, 0, .2, 1);
+}
+
+/* board */
+.boardwrap {
+  position: relative;
+  width: min(660px, calc(100vh - 220px), 100%);
+  aspect-ratio: 1;
+  border-radius: 12px;
+  padding: 14px;
+  background:
+    linear-gradient(160deg, var(--fr1) 0%, var(--fr2) 35%, var(--fr3) 100%);
+  box-shadow:
+    0 14px 48px rgba(0,0,0,.55),
+    inset 0 1px 0 rgba(255,255,255,.08),
+    inset 0 -1px 0 rgba(0,0,0,.4);
+  flex: none;
+  transition: background .4s;
+}
+/* thin golden trim ring in the frame */
+.boardwrap::before {
+  content: ''; position: absolute; inset: 9px;
+  border: 1px solid rgba(212, 169, 78, .32);
+  border-radius: 8px; pointer-events: none;
+}
+#board {
+  position: relative; width: 100%; height: 100%;
+  border-radius: 4px; overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.45);
+}
+/* file (a-h) / rank (1-8) labels in the frame's padding strip */
+.coordFiles, .coordRanks {
+  position: absolute; pointer-events: none; z-index: 6;
+  color: var(--gold-dim); font-size: 10px; font-weight: 700;
+  text-shadow: 0 1px 1px rgba(0,0,0,.5);
+}
+.coordFiles { left: 14px; right: 14px; bottom: 1px; height: 12px; display: flex; }
+.coordFiles span { flex: 1; text-align: center; }
+.coordRanks { top: 14px; bottom: 14px; left: 2px; width: 11px; display: flex; flex-direction: column; }
+.coordRanks span { flex: 1; display: flex; align-items: center; justify-content: center; }
+/* glossy sheen + vignette above the squares */
+#board::after {
+  content: ''; position: absolute; inset: 0; z-index: 4;
+  pointer-events: none;
+  background:
+    linear-gradient(118deg, rgba(255,255,255,.075) 0%, rgba(255,255,255,.02) 28%, transparent 45%),
+    radial-gradient(140% 140% at 50% 45%, transparent 62%, rgba(20, 12, 4, .18) 100%);
+}
+.sq { position: absolute; width: 12.5%; height: 12.5%; transition: background .4s; }
+.sq.light { background: linear-gradient(135deg, var(--sqL1) 0%, var(--sqL2) 100%); }
+.sq.dark  { background: linear-gradient(135deg, var(--sqD1) 0%, var(--sqD2) 100%); }
+/* hover on a selectable piece's square */
+#board.playable .sq.canpick:hover .tint {
+  background: var(--hov); opacity: 1;
+}
+.sq .tint { position: absolute; inset: 0; opacity: 0; transition: opacity .15s; }
+.sq.lastmv .tint { background: var(--lastmv); opacity: 1; }
+.sq.sel    .tint { background: var(--sel);    opacity: 1; }
+.sq.checked .tint {
+  background: radial-gradient(circle, rgba(224,60,60,.75) 15%, rgba(224,60,60,0) 75%);
+  opacity: 1;
+}
+.sq .hint { position: absolute; inset: 0; display: none; pointer-events: none; z-index: 2; }
+.sq.dot .hint { display: block;
+  background: radial-gradient(circle, rgba(var(--hint), .34) 0 26%, transparent 28%); }
+.sq.ring .hint { display: block;
+  background: radial-gradient(circle, transparent 0 61%, rgba(var(--hint), .36) 63% 88%, transparent 90%); }
+.sq.dot:hover .hint, .sq.ring:hover .hint { filter: brightness(1.7); }
+
+.piece {
+  position: absolute; width: 12.5%; height: 12.5%;
+  pointer-events: none; z-index: 3;
+  transition: transform .22s cubic-bezier(.3, .9, .4, 1);
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .38));
+}
+.piece svg {
+  width: 100%; height: 100%; display: block;
+  transition: transform .16s ease;
+  transform-origin: 50% 62%;
+}
+/* picked-up piece: slight lift */
+.piece.picked { filter: drop-shadow(0 7px 9px rgba(0, 0, 0, .45)); z-index: 5; }
+.piece.picked svg { transform: scale(1.08) translateY(-2%); }
+.piece.fade { transition: opacity .18s; opacity: 0; }
+#board.playable .sq { cursor: pointer; }
+
+/* scoresheet (collapsible) */
+.scoresheet {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 4px 24px rgba(0,0,0,.25);
+}
+.scorebtn {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 11px 20px; border: none; background: none; cursor: pointer;
+  color: var(--text); font-size: 13px; font-family: inherit;
+  transition: background .15s;
+}
+.scorebtn:hover { background: var(--panel-2); }
+.scorebtn .cnt { color: var(--muted); }
+.scorebtn .evaltxt { color: var(--gold); margin-left: auto;
+                     font-family: ui-monospace, Consolas, monospace; }
+.scorebtn .chev { color: var(--muted); transition: transform .2s; margin-left: 8px; }
+.scoresheet.open .chev { transform: rotate(180deg); }
+.scorelist {
+  display: none; max-height: 260px; overflow-y: auto;
+  padding: 6px 20px 14px; border-top: 1px solid var(--border);
+}
+.scoresheet.open .scorelist { display: block; }
+.scorelist::-webkit-scrollbar { width: 8px; }
+.scorelist::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.scorerow {
+  display: grid; grid-template-columns: 44px 1fr 1fr;
+  padding: 5px 4px; font-size: 13.5px;
+  font-family: ui-monospace, Consolas, monospace;
+  border-radius: 6px;
+}
+.scorerow:nth-child(odd) { background: rgba(255,255,255,.025); }
+.scorerow .n { color: var(--muted); }
+.scorerow b { color: var(--text); font-weight: 600; }
+
+/* ── Feed ───────────────────────────────────────────────── */
+#feedPanel { display: flex; flex-direction: column; max-height: calc(100vh - 140px); }
+#feed { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 9px;
+        padding-right: 4px; }
+#feed::-webkit-scrollbar { width: 8px; }
+#feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.card {
+  border-left: 3px solid var(--muted);
+  background: var(--panel-2);
+  border-radius: 0 9px 9px 0;
+  padding: 10px 14px;
+  animation: slidein .25s ease;
+}
+@keyframes slidein { from { opacity: 0; transform: translateY(-6px); } }
+.card .who { font-size: 10px; font-weight: 700; letter-spacing: .12em;
+             margin-bottom: 5px; display: flex; align-items: center; gap: 8px; }
+.card .txt { font-size: 13.5px; line-height: 1.65; }
+.card.critical { border-color: #ef4444; } .card.critical .who { color: #ef4444; }
+.card.notable  { border-color: #f0b429; } .card.notable  .who { color: #f0b429; }
+.card.routine  { border-color: #6b7280; } .card.routine  .who { color: #9aa3b2; }
+.card.filler   { border-color: #4a5568; background: rgba(255,255,255,.015); }
+.card.filler .who { color: #7c8798; } .card.filler .txt { color: #a8b0bf; }
+.card .playbtn {
+  margin-left: auto; cursor: pointer; border: none; background: none;
+  color: var(--muted); font-size: 13px; padding: 0 2px;
+}
+.card .playbtn:hover { color: var(--gold); }
+.card .rate { display: flex; gap: 2px; }
+.card .playbtn + .rate { margin-left: 6px; }
+.card .rate:first-child, .card .who > .rate { margin-left: auto; }
+.card .ratebtn {
+  cursor: pointer; border: none; background: none; padding: 0 2px;
+  font-size: 12px; line-height: 1; opacity: .4; filter: grayscale(1);
+  transition: opacity .12s, filter .12s, transform .12s;
+}
+.card .ratebtn:hover { opacity: 1; filter: grayscale(0); transform: scale(1.15); }
+.card .ratebtn.on { opacity: 1; filter: grayscale(0); }
+.card .ratebtn:disabled { cursor: default; }
+.mutedline { font-size: 11.5px; color: #5d6577; padding: 2px 6px;
+             font-family: ui-monospace, Consolas, monospace; }
+.feedempty { color: var(--muted); font-size: 13px; text-align: center;
+             margin-top: 40px; line-height: 1.8; }
+
+/* game-over veil */
+#veil {
+  position: absolute; inset: 0; z-index: 10; display: none;
+  place-items: center; border-radius: 5px;
+  background: rgba(10, 12, 18, .72); backdrop-filter: blur(2px);
+}
+#veil.show { display: grid; }
+#veil .box { text-align: center; }
+#veil .r { font-size: 34px; font-weight: 800; letter-spacing: .1em;
+           color: var(--gold); font-family: "Noto Serif TC", serif; }
+#veil .d { color: var(--muted); margin-top: 8px; font-size: 14px; }
+</style>
+</head>
+<body data-btheme="graphite">
+
+<header>
+  <div class="logo">♞</div>
+  <div>
+    <h1>棋訊直播間</h1>
+    <div class="sub">CHESS BROADCAST STUDIO</div>
+  </div>
+  <div class="onair"><span class="dot"></span>ON AIR</div>
+  <div class="volctl" id="volCtl">
+    <button class="volbtn" id="volBtn" title="靜音 / 取消靜音">🔊</button>
+    <input type="range" id="volSlider" min="0" max="100" value="80" title="音量">
+  </div>
+</header>
+
+<main>
+  <!-- ── Settings ── -->
+  <div class="panel" id="settings">
+    <h2>對弈設定 <span class="en">SETUP</span></h2>
+
+    <div class="field">
+      <label>主播風格</label>
+      <div class="pills" id="personaPills">
+        <div class="pill on" data-v="calm">沉穩</div>
+        <div class="pill" data-v="excited">熱血</div>
+        <div class="pill" data-v="realcast">真人</div>
+        <div class="pill" data-v="personas2">熱血真人</div>
+      </div>
+    </div>
+
+    <hr class="sep">
+
+    <div class="field">
+      <label>對手</label>
+      <div class="pills" id="oppPills">
+        <div class="pill on" data-v="engine">引擎</div>
+        <div class="pill" data-v="human">雙人對弈</div>
+      </div>
+    </div>
+
+    <div class="field" id="colorField">
+      <label>你執</label>
+      <div class="pills" id="colorPills">
+        <div class="pill on" data-v="white">白方</div>
+        <div class="pill" data-v="black">黑方</div>
+      </div>
+    </div>
+
+    <div class="field" id="depthField">
+      <label>引擎深度<span class="depthval" id="depthVal">8</span></label>
+      <input type="range" id="depth" min="2" max="16" value="8">
+    </div>
+
+    <hr class="sep">
+
+    <div class="field">
+      <label>棋盤色調</label>
+      <div class="pills" id="themePills">
+        <div class="pill on" data-v="graphite">石墨</div>
+        <div class="pill" data-v="wood">胡桃木</div>
+        <div class="pill" data-v="emerald">翡翠</div>
+        <div class="pill" data-v="ocean">海洋</div>
+      </div>
+    </div>
+
+    <button class="newgame" id="btnNew">開 新 對 局</button>
+    <div class="note" id="engineNote" style="display:none"></div>
+
+    <hr class="sep">
+    <div class="field">
+      <label>觀戰名局　自動重放＋即時解說</label>
+      <select id="gameSelect" style="width:100%;padding:7px 9px;border-radius:7px;background:var(--panel-2);color:inherit;border:1px solid var(--border);font-size:12.5px;margin-bottom:8px"></select>
+      <button class="newgame" id="btnReplay">▶ 觀 戰 重 放</button>
+    </div>
+  </div>
+
+  <!-- ── Board ── -->
+  <div id="center">
+    <div class="statusbar" id="statusbar">
+      <div id="stTurnDot"></div>
+      <span id="stText">載入中…</span>
+      <span class="tag" id="stTag">READY</span>
+    </div>
+
+    <div class="arena">
+      <div class="evalbar"><div id="evalWhite"></div></div>
+      <div class="boardwrap">
+        <div class="coordFiles" id="coordFiles"></div>
+        <div class="coordRanks" id="coordRanks"></div>
+        <div id="board">
+          <div id="veil"><div class="box"><div class="r" id="veilR"></div><div class="d" id="veilD"></div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="scoresheet" id="scoresheet">
+      <button class="scorebtn" id="scoreBtn">
+        <span>📜 棋譜</span><span class="cnt" id="scoreCnt">尚未開局</span>
+        <span class="evaltxt" id="scoreEval"></span><span class="chev">▾</span>
+      </button>
+      <div class="scorelist" id="scoreList"></div>
+    </div>
+  </div>
+
+  <!-- ── Live feed ── -->
+  <div class="panel" id="feedPanel">
+    <h2>📡 即時播報 <span class="en">LIVE FEED</span></h2>
+    <div id="feed"><div class="feedempty">開局後，主播與分析師<br>將在這裡即時解說。</div></div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const FILES = 'abcdefgh';
+const SPEAKER_NAME = { play_by_play: '主播', analyst: '分析師' };
+const SPEAKER_ICON = { play_by_play: '🎙️', analyst: '🧠' };
+
+let PIECES = {};          // symbol -> svg string
+let S = null;             // latest server snapshot
+let sel = null;           // selected square name e.g. 'e2'
+let orientation = 'white';
+let busy = false;
+let sqEls = {}, pieceEls = {};   // square name -> element
+let lastMoveSqs = [];            // every square touched by the last syncPieces diff
+                                  // (castling moves 2 pieces — S.last_move only names the king's)
+
+/* ── helpers ── */
+function sqName(f, r) { return FILES[f] + (r + 1); }
+function sqXY(name) {           // board-relative % offsets by orientation
+  const f = FILES.indexOf(name[0]), r = +name[1] - 1;
+  const x = orientation === 'white' ? f : 7 - f;
+  const y = orientation === 'white' ? 7 - r : r;
+  return [x, y];
+}
+function parseFen(fen) {
+  const out = {};
+  fen.split(' ')[0].split('/').forEach((row, ri) => {
+    let fi = 0;
+    for (const c of row) {
+      if (c >= '1' && c <= '8') fi += +c;
+      else { out[sqName(fi, 7 - ri)] = c; fi++; }
+    }
+  });
+  return out;
+}
+
+/* ── build the 64 squares once ── */
+function buildBoard() {
+  const bd = $('#board');
+  for (let r = 0; r < 8; r++) for (let f = 0; f < 8; f++) {
+    const name = sqName(f, r);
+    const el = document.createElement('div');
+    el.className = 'sq ' + ((f + r) % 2 ? 'light' : 'dark');
+    el.dataset.sq = name;
+    el.innerHTML = '<div class="tint"></div><div class="hint"></div>';
+    el.addEventListener('click', () => onSquareClick(name));
+    bd.appendChild(el);
+    sqEls[name] = el;
+  }
+  placeSquares();
+}
+function placeSquares() {
+  for (const [name, el] of Object.entries(sqEls)) {
+    const [x, y] = sqXY(name);
+    el.style.left = x * 12.5 + '%';
+    el.style.top = y * 12.5 + '%';
+  }
+  for (const [name, el] of Object.entries(pieceEls)) setPiecePos(el, name);
+  renderCoords();
+}
+function renderCoords() {
+  const files = orientation === 'white' ? [...FILES] : [...FILES].reverse();
+  const ranks = orientation === 'white' ? [8, 7, 6, 5, 4, 3, 2, 1] : [1, 2, 3, 4, 5, 6, 7, 8];
+  $('#coordFiles').innerHTML = files.map(f => `<span>${f}</span>`).join('');
+  $('#coordRanks').innerHTML = ranks.map(r => `<span>${r}</span>`).join('');
+}
+function setPiecePos(el, name) {
+  const [x, y] = sqXY(name);
+  el.style.transform = `translate(${x * 100}%, ${y * 100}%)`;
+}
+
+/* ── piece layer: diff + animate, never reload the page ── */
+function syncPieces(fen) {
+  const want = parseFen(fen);
+  const removed = [], added = [];
+  for (const [sq, el] of Object.entries(pieceEls))
+    if (want[sq] !== el.dataset.sym) removed.push(sq);
+  for (const [sq, sym] of Object.entries(want))
+    if (!pieceEls[sq] || pieceEls[sq].dataset.sym !== sym) added.push(sq);
+
+  const touched = [];
+
+  // pair removed→added with the same symbol → slide animation
+  for (const to of [...added]) {
+    const sym = want[to];
+    const fromIdx = removed.findIndex(sq => pieceEls[sq]?.dataset.sym === sym);
+    if (fromIdx === -1) continue;
+    const from = removed[fromIdx];
+    removed.splice(fromIdx, 1);
+    added.splice(added.indexOf(to), 1);
+    const el = pieceEls[from];
+    delete pieceEls[from];
+    // capture: fade out the occupant first
+    if (pieceEls[to]) { fadeOut(pieceEls[to]); delete pieceEls[to]; }
+    // `to` was also in removed (its occupant changed) — drop it so the
+    // cleanup loop below doesn't fade the piece that just slid in
+    const toIdx = removed.indexOf(to);
+    if (toIdx !== -1) removed.splice(toIdx, 1);
+    pieceEls[to] = el;
+    el.dataset.sq = to;
+    setPiecePos(el, to);
+    touched.push(from, to);
+  }
+  for (const sq of removed) { fadeOut(pieceEls[sq]); delete pieceEls[sq]; touched.push(sq); }
+  for (const sq of added) {
+    const el = document.createElement('div');
+    el.className = 'piece';
+    el.dataset.sym = want[sq]; el.dataset.sq = sq;
+    el.innerHTML = PIECES[want[sq]] || '';
+    setPiecePos(el, sq);
+    $('#board').appendChild(el);
+    pieceEls[sq] = el;
+    touched.push(sq);
+  }
+  // a real move touches at most 4 squares (castling); a bigger diff means this
+  // was a full-board resync (initial load / new game) — clear any stale highlight
+  // from a previous game instead of treating the whole board as "just moved"
+  if (touched.length > 4) lastMoveSqs = [];
+  else if (touched.length) lastMoveSqs = touched;
+}
+function fadeOut(el) { el.classList.add('fade'); setTimeout(() => el.remove(), 200); }
+
+/* ── highlights ── */
+function paint() {
+  const lastSqs = lastMoveSqs;   // from the last syncPieces diff — covers castling's rook, e.p.'s pawn
+  const dests = new Set(), caps = new Set();
+  if (sel && S) {
+    const pos = parseFen(S.fen);
+    for (const m of S.legal_moves)
+      if (m.slice(0, 2) === sel) {
+        const to = m.slice(2, 4);
+        dests.add(to);
+        if (pos[to]) caps.add(to);
+      }
+  }
+  let checkedSq = null;
+  if (S?.is_check) {
+    const pos = parseFen(S.fen);
+    const k = S.turn === 'white' ? 'K' : 'k';
+    checkedSq = Object.keys(pos).find(sq => pos[sq] === k);
+  }
+  // squares whose piece can be picked up right now
+  const pickable = new Set();
+  if (S && !busy && !S.game_over && !S.engine_to_move)
+    for (const m of S.legal_moves) pickable.add(m.slice(0, 2));
+
+  for (const [name, el] of Object.entries(sqEls)) {
+    el.classList.toggle('sel', name === sel);
+    el.classList.toggle('lastmv', lastSqs.includes(name) && name !== sel);
+    el.classList.toggle('dot', dests.has(name) && !caps.has(name));
+    el.classList.toggle('ring', caps.has(name));
+    el.classList.toggle('checked', name === checkedSq);
+    el.classList.toggle('canpick', pickable.has(name));
+  }
+  for (const [name, el] of Object.entries(pieceEls))
+    el.classList.toggle('picked', name === sel);
+}
+
+/* ── status / eval / scoresheet / feed ── */
+function renderMeta() {
+  const dot = $('#stTurnDot'), txt = $('#stText'), tag = $('#stTag'),
+        bar = $('#statusbar');
+  dot.classList.toggle('black', S.turn === 'black');
+  bar.classList.toggle('thinking', busy);
+  if (S.game_over) {
+    txt.textContent = `對局結束 ${S.result}` + (S.is_checkmate ? '（將殺）' : '');
+    tag.textContent = 'FINISHED';
+    $('#veilR').textContent = S.result;
+    $('#veilD').textContent = S.is_checkmate ? '將殺' : '對局結束';
+    $('#veil').classList.add('show');
+  } else {
+    $('#veil').classList.remove('show');
+    if (busy) { txt.textContent = '引擎思考中…'; tag.textContent = 'THINKING'; }
+    else {
+      txt.textContent = (S.turn === 'white' ? '白方回合' : '黑方回合')
+        + (S.is_check ? '＊將軍＊' : '') + ' — 點選棋子';
+      tag.textContent = 'READY';
+    }
+  }
+  $('#board').classList.toggle('playable', !busy && !S.game_over && !S.engine_to_move && !replayMode());
+
+  // eval bar arrives asynchronously over SSE
+  renderEval();
+
+  // scoresheet (collapsible)
+  if (S.sans.length) {
+    $('#scoreCnt').textContent = `${S.sans.length} 手`;
+    let html = '';
+    for (let i = 0; i < S.sans.length; i += 2) {
+      html += `<div class="scorerow"><span class="n">${i / 2 + 1}.</span>` +
+              `<b>${S.sans[i]}</b><b>${S.sans[i + 1] || ''}</b></div>`;
+    }
+    const list = $('#scoreList');
+    list.innerHTML = html;
+    list.scrollTop = list.scrollHeight;
+  } else {
+    $('#scoreCnt').textContent = '尚未開局';
+    $('#scoreEval').textContent = '';
+    $('#scoreList').innerHTML = '';
+  }
+
+  const notes = [];
+  if (S.mock_engine)
+    notes.push('MOCK 引擎：評估恆為 0。設定 STOCKFISH_PATH 取得真實對弈。');
+  if (!S.llm_available)
+    notes.push('未設定 OPENAI_API_KEY：LLM 解說停用，退回模板文字（語音仍可用）。');
+  $('#engineNote').style.display = notes.length ? 'block' : 'none';
+  $('#engineNote').textContent = notes.join(' ');
+}
+
+/* ── audio queue: utterances play in order; flush = barge-in ── */
+const AudioQ = {
+  q: [], cur: null, pending: false, lastEnd: Date.now(),
+  enqueue(b64, flush, sev, ply, fmt, gap) {
+    if (flush) this.flush();
+    this.q.push({ b64, sev, ply, fmt: fmt || 'mp3', gap: gap ? 900 : 0 });
+    this.pump();
+  },
+  flush() {
+    this.q = [];
+    if (this.pendingTimer) { clearTimeout(this.pendingTimer); this.pendingTimer = null; }
+    this.pending = false;
+    if (this.cur) { try { this.cur.pause(); } catch (e) {} this.cur = null; }
+  },
+  // staleness tolerance by importance (in plies): chatter about an old
+  // position is pointless, but a critical clip is worth hearing even late
+  MAX_AGE: { filler: 0, routine: 1, notable: 2 },   // critical: keep forever
+  trim(ply) {
+    if (typeof ply !== 'number') return;
+    this.q = this.q.filter(it => {
+      if (it.ply === undefined) return true;
+      const age = this.MAX_AGE[it.sev];
+      return age === undefined || it.ply >= ply - age;
+    });
+  },
+  pump() {
+    if (this.cur || this.pending || !this.q.length) return;
+    const item = this.q.shift();
+    const play = () => {
+      this.pending = false;
+      const a = new Audio(`data:audio/${item.fmt};base64,` + item.b64);
+      a.volume = VOLUME;
+      this.cur = a;
+      const done = () => { this.cur = null; this.lastEnd = Date.now(); this.pump(); };
+      a.onended = done; a.onerror = done;
+      a.play().catch(done);
+      // keep the conversation flowing: while the LAST queued chatter clip is
+      // playing, ask for the next batch so it arrives before the silence
+      if (item.sev === 'filler' && this.q.length === 0) requestFiller('continue');
+    };
+    if (item.gap) {   // a short breath before this clip (e.g. before the sign-off)
+      this.pending = true;
+      this.pendingTimer = setTimeout(play, item.gap);
+    } else play();
+  },
+  idleMs() { return (this.cur || this.pending || this.q.length) ? 0 : Date.now() - this.lastEnd; },
+};
+
+function playB64(b64, fmt) { AudioQ.enqueue(b64, true, 'replay', undefined, fmt); }
+
+/* ── 角色記錄檔: thumbs a booth line into (or out of) the style profile ── */
+function wireRating(el, e) {
+  const up = el.querySelector('.ratebtn.up');
+  const down = el.querySelector('.ratebtn.down');
+  if (!up || !down) return;
+  const ctx = e.ctx || {};
+  const send = async (verdict, btn, other) => {
+    btn.classList.add('on'); other.classList.remove('on');
+    try {
+      await fetch('/api/feedback', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          verdict, persona: ctx.persona || '', speaker: e.speaker, text: e.text,
+          intensity: ctx.intensity ?? 0.2, tags: ctx.tags || [], san: ctx.san ?? null,
+        }),
+      });
+    } catch (_) { btn.classList.remove('on'); }
+  };
+  up.onclick = () => send('good', up, down);
+  down.onclick = () => send('bad', down, up);
+}
+
+function addFeedEntry(e, live) {
+  const feed = $('#feed');
+  const empty = feed.querySelector('.feedempty');
+  if (empty) empty.remove();
+  let el;
+  if (!e.speaker) {
+    el = document.createElement('div');
+    el.className = 'mutedline';
+    el.textContent = `· ${e.text}（例行，靜默）`;
+  } else {
+    el = document.createElement('div');
+    el.className = 'card ' + e.severity;
+    const name = SPEAKER_NAME[e.speaker] || e.speaker;
+    const icon = e.route === 'opening' ? '🎬'
+               : e.severity === 'filler' ? '💬'
+               : (SPEAKER_ICON[e.speaker] || '💬');
+    const route = e.route === 'opening' ? '開場'
+                : e.route === 'closing' ? '收官'
+                : e.severity === 'filler' ? '閒聊'
+                : e.route.toUpperCase();
+    el.innerHTML =
+      `<div class="who">${icon} ${name} · ${route}` +
+      (e.audio ? `<button class="playbtn" title="重播語音">▶</button>` : '') +
+      `<span class="rate">` +
+        `<button class="ratebtn up" title="喜歡這種講法（存進風格檔）">👍</button>` +
+        `<button class="ratebtn down" title="不喜歡（從風格檔剔除）">👎</button>` +
+      `</span>` +
+      `</div><div class="txt"></div>`;
+    el.querySelector('.txt').textContent = e.text;
+    if (e.audio) {
+      el.querySelector('.playbtn').onclick = () => playB64(e.audio, e.audio_format);
+      if (live) AudioQ.enqueue(e.audio, !!e.flush, e.severity, e.ply, e.audio_format, e.gap_before);
+    }
+    wireRating(el, e);
+  }
+  feed.prepend(el);
+  if (live) AudioQ.lastEnd = Math.max(AudioQ.lastEnd, Date.now());
+}
+
+/* ── SSE: commentary + eval arrive whenever they're ready ── */
+let EVAL = null;
+function connectStream() {
+  const es = new EventSource('/api/stream');
+  es.onmessage = ev => {
+    let e;
+    try { e = JSON.parse(ev.data); } catch (err) { return; }
+    if (e.type === 'utterance') {
+      AudioQ.trim(e.ply);           // drop stale unplayed audio first
+      addFeedEntry(e, true);
+    } else if (e.type === 'eval') {
+      AudioQ.trim(e.ply);           // fires per processed move, even silent ones
+      EVAL = e;
+      renderEval();
+    } else if (e.type === 'board') {
+      // a move was made by someone other than us (replay auto-play, or the
+      // engine's reply) — follow the board live over SSE
+      if (S) {
+        S.fen = e.fen; S.sans = e.sans || S.sans;
+        S.last_move = e.last_move; S.game_over = e.game_over;
+        S.turn = e.fen.split(' ')[1] === 'w' ? 'white' : 'black';
+      }
+      syncPieces(e.fen);
+      renderMeta();
+    } else if (e.type === 'step_done') {
+      // this move's (or the opening's) commentary is fully generated + emitted;
+      // the replay driver may advance once the audio finishes playing
+      if (replayOn) replayStepReady = true;
+    } else if (e.type === 'reset') {
+      EVAL = null;
+      AudioQ.flush();
+    }
+  };
+  // EventSource auto-reconnects on error
+}
+
+function renderEval() {
+  if (!EVAL) { $('#evalWhite').style.height = '50%'; return; }
+  const cp = Math.max(-1000, Math.min(1000, EVAL.score_cp));
+  $('#evalWhite').style.height = (50 + cp / 20) * .9 + 5 + '%';
+  if (S && S.sans.length)
+    $('#scoreEval').textContent = `評估 ${(EVAL.score_cp / 100).toFixed(1)}`;
+}
+
+/* ── dead-air detection → filler chat (Phase C) ──
+   'idle': 5s of true silence starts a chat session.
+   'continue': requested while the last chatter clip still plays, so the
+   next batch arrives seamlessly and the conversation keeps flowing. */
+let lastFillerReq = 0;
+function requestFiller(mode) {
+  if (!S || !S.sans || !S.sans.length || S.game_over || busy) return;
+  const cooldown = mode === 'continue' ? 4000 : 12000;
+  if (Date.now() - lastFillerReq < cooldown) return;
+  lastFillerReq = Date.now();
+  fetch('/api/filler', { method: 'POST' }).catch(() => {});
+}
+// replay is client-paced: advance once this move's commentary is generated
+// (step_done) AND its audio has played out (AudioQ idle) — no fixed timer, so
+// exciting moves get their full spoken line and quiet moves breeze past.
+let replayOn = false, replayStepReady = false, replayPending = false;
+setInterval(() => {
+  if (replayMode() && replayOn) {
+    if (replayStepReady && !replayPending && AudioQ.idleMs() >= 700) {
+      replayStepReady = false; replayPending = true;
+      fetch('/api/replay/next', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => { replayPending = false; if (d.done) replayOn = false; })
+        .catch(() => { replayPending = false; });
+    }
+    return;                        // no dead-air filler while replaying
+  }
+  if (AudioQ.idleMs() >= 5000) requestFiller('idle');
+}, 500);
+
+/* ── interactions ── */
+function replayMode() { return !!(S && S.opts && S.opts.mode === 'replay'); }
+function canSelect(sq) {
+  if (!S || busy || S.game_over || S.engine_to_move || replayMode()) return false;
+  return S.legal_moves.some(m => m.slice(0, 2) === sq);
+}
+function onSquareClick(sq) {
+  if (!S || busy || S.game_over || S.engine_to_move || replayMode()) return;
+  if (!sel) {
+    if (canSelect(sq)) { sel = sq; paint(); }
+    return;
+  }
+  const legal = S.legal_moves.find(m => m.slice(0, 4) === sel + sq);
+  if (legal) { sendMove(legal); return; }
+  sel = (canSelect(sq) && sq !== sel) ? sq : null;
+  paint();
+}
+async function sendMove(uci) {
+  // optimistic local animation of the human move
+  const fenNow = parseFen(S.fen);
+  const from = uci.slice(0, 2), to = uci.slice(2, 4);
+  sel = null;
+  const el = pieceEls[from];
+  if (el) {
+    if (pieceEls[to]) { fadeOut(pieceEls[to]); delete pieceEls[to]; }
+    delete pieceEls[from];
+    pieceEls[to] = el;
+    setPiecePos(el, to);
+  }
+  busy = true; renderMeta(); paint();
+  try {
+    const r = await fetch('/api/move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uci }),
+    });
+    const data = await r.json();
+    if (data.error) { await refresh(); busy = false; renderMeta(); return; }
+    applySnapshot(data);
+  } catch (e) { console.error(e); }
+  busy = false; renderMeta(); paint();
+}
+
+function applySnapshot(data) {
+  S = data;
+  syncPieces(S.fen);
+  paint();
+  renderMeta();
+  // commentary/eval arrive separately over SSE
+}
+
+async function refresh() {
+  const r = await fetch('/api/state');
+  S = await r.json();
+  syncPieces(S.fen); paint(); renderMeta();
+  // rebuild the feed on page (re)load, without autoplaying old audio
+  if (S.feed && S.feed.length) {
+    $('#feed').innerHTML = '';
+    for (const e of S.feed) addFeedEntry(e, false);
+  }
+}
+
+/* ── settings ── */
+function pillGroup(id, cb) {
+  const g = $(id);
+  g.addEventListener('click', e => {
+    const p = e.target.closest('.pill');
+    if (!p) return;
+    g.querySelectorAll('.pill').forEach(x => x.classList.remove('on'));
+    p.classList.add('on');
+    cb && cb(p.dataset.v);
+  });
+}
+function pillVal(id) { return $(id + ' .pill.on').dataset.v; }
+/* settings apply LIVE — no need to restart the game */
+async function pushOpts() {
+  try {
+    await fetch('/api/opts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        persona: pillVal('#personaPills'),
+        depth: +$('#depth').value,
+      }),
+    });
+  } catch (e) { console.error(e); }
+}
+
+/* voice is always on — unlock browser audio on the first interaction */
+document.addEventListener('pointerdown', () => {
+  try {
+    const a = new Audio('data:audio/mp3;base64,//uQxAAA');
+    a.volume = 0; a.play().catch(() => {});
+  } catch (e) {}
+}, { once: true });
+
+pillGroup('#personaPills', pushOpts);
+pillGroup('#colorPills');
+pillGroup('#oppPills', v => {
+  const eng = v === 'engine';
+  $('#colorField').style.opacity = eng ? 1 : .35;
+  $('#depthField').style.opacity = eng ? 1 : .35;
+  $('#colorField').style.pointerEvents = eng ? 'auto' : 'none';
+  $('#depthField').style.pointerEvents = eng ? 'auto' : 'none';
+});
+$('#depth').addEventListener('input', () => $('#depthVal').textContent = $('#depth').value);
+$('#depth').addEventListener('change', pushOpts);
+
+$('#scoreBtn').addEventListener('click', () =>
+  $('#scoresheet').classList.toggle('open'));
+
+/* board theme — applies instantly, remembered across visits */
+pillGroup('#themePills', v => {
+  document.body.dataset.btheme = v;
+  localStorage.setItem('btheme', v);
+});
+(function initTheme() {
+  const t = localStorage.getItem('btheme');
+  if (!t || !document.querySelector(`#themePills .pill[data-v="${t}"]`)) return;
+  document.body.dataset.btheme = t;
+  document.querySelectorAll('#themePills .pill').forEach(p =>
+    p.classList.toggle('on', p.dataset.v === t));
+})();
+
+/* volume — applies live to whichever clip is currently playing, remembered across visits */
+function volIcon(v) { return v === 0 ? '🔇' : v < 50 ? '🔉' : '🔊'; }
+function setVolume(pct) {
+  VOLUME = Math.max(0, Math.min(100, pct)) / 100;
+  $('#volSlider').value = pct;
+  $('#volBtn').textContent = volIcon(pct);
+  if (AudioQ.cur) AudioQ.cur.volume = VOLUME;
+  localStorage.setItem('volume', pct);
+}
+let VOLUME = 0.8, volBeforeMute = 80;
+(function initVolume() {
+  const saved = localStorage.getItem('volume');
+  setVolume(saved === null ? 80 : +saved);
+})();
+$('#volSlider').addEventListener('input', () => setVolume(+$('#volSlider').value));
+$('#volBtn').addEventListener('click', () => {
+  const cur = +$('#volSlider').value;
+  if (cur > 0) { volBeforeMute = cur; setVolume(0); }
+  else setVolume(volBeforeMute || 80);
+});
+
+$('#btnNew').addEventListener('click', async () => {
+  replayOn = false;                    // leaving replay mode for a live game
+  const vsEngine = pillVal('#oppPills') === 'engine';
+  const humanWhite = pillVal('#colorPills') === 'white';
+  orientation = (!vsEngine || humanWhite) ? 'white' : 'black';
+  placeSquares();
+  sel = null;
+  $('#feed').innerHTML = '<div class="feedempty">開局後，主播與分析師<br>將在這裡即時解說。</div>';
+  busy = true; renderMeta?.call?.(null);
+  const r = await fetch('/api/new', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      vs_engine: vsEngine,
+      human_is_white: humanWhite,
+      depth: +$('#depth').value,
+      persona: pillVal('#personaPills'),
+    }),
+  });
+  busy = false;
+  applySnapshot(await r.json());
+});
+
+/* ── replay: pick a preset real game and auto-play it with live commentary ── */
+async function loadGames() {
+  try {
+    const { games } = await (await fetch('/api/games')).json();
+    $('#gameSelect').innerHTML = games.map(g =>
+      `<option value="${g.file}">${g.white} vs ${g.black}${g.event ? ' — ' + g.event : ''}</option>`
+    ).join('');
+  } catch (_) {}
+}
+async function startReplay() {
+  const pgn = $('#gameSelect').value;
+  if (!pgn) return;
+  sel = null;
+  $('#feed').innerHTML = '<div class="feedempty">名局重放中，主播即時解說…</div>';
+  busy = true; renderMeta?.call?.(null);
+  try {
+    const r = await fetch('/api/replay', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pgn, persona: pillVal('#personaPills'), tts_on: true }),
+    });
+    const data = await r.json();
+    if (data.error) { alert('無法重放：' + data.error); busy = false; return; }
+    busy = false;
+    applySnapshot(data);   // board follows the rest live via SSE 'board' events
+    // arm the client-paced driver; the opening remark's step_done fires move 1
+    replayStepReady = false; replayPending = false; replayOn = true;
+  } catch (e) { console.error(e); busy = false; }
+}
+
+/* ── boot ── */
+(async function boot() {
+  PIECES = await (await fetch('/api/pieces')).json();
+  buildBoard();
+  connectStream();
+  await refresh();
+  await loadGames();
+  $('#btnReplay').addEventListener('click', startReplay);
+})();
+</script>
+</body>
+</html>

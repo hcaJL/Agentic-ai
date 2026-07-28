@@ -20,9 +20,11 @@ def build_graph(engine, persona: str = "calm"):
     g.add_node("perception", partial(perception_node, engine=engine))
     g.add_node("detect_event", event_detector_node)
     g.add_node("director", director_node)
-    g.add_node("light", partial(light_commentary_node, persona=persona))
+    # persona can change at runtime (Streamlit sidebar) — read it from state,
+    # falling back to the build-time default
+    g.add_node("light", lambda s: light_commentary_node(s, s.get("persona", persona)))
     g.add_node("retrieve_memory", retrieve_memory_node)
-    g.add_node("booth", partial(booth_node, persona=persona))
+    g.add_node("booth", lambda s: booth_node(s, s.get("persona", persona)))
     g.add_node("update_memory", update_memory_node)
 
     g.set_entry_point("perception")

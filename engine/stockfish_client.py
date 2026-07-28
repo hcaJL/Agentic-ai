@@ -3,6 +3,8 @@
 Falls back to a deterministic MOCK engine when Stockfish isn't available, so the
 rest of the pipeline runs offline. Replace nothing — just set STOCKFISH_PATH.
 """
+import threading
+
 import chess
 import chess.engine
 import config
@@ -22,6 +24,14 @@ class StockfishClient:
         self.path = path or config.STOCKFISH_PATH
         self._engine = None
         self.mock = False
+        # SimpleEngine is only "thread-safe" in that it won't corrupt state across
+        # threads — but a new command cancels whatever command is still in flight.
+        # This client is shared by the live /api/move engine-reply path AND the
+        # background commentary worker's per-move analysis, both on Stockfish
+        # calls from different threads, so calls must be serialized or one of
+        # them raises CancelledError (that's what was silently killing the
+        # engine's reply move).
+        self._lock = threading.Lock()
         try:
             self._engine = chess.engine.SimpleEngine.popen_uci(self.path)
         except Exception:
@@ -30,9 +40,10 @@ class StockfishClient:
     def analyse(self, board: chess.Board, depth: int, multipv: int = 1) -> dict:
         if self.mock:
             return self._mock_analyse(board, depth, multipv)
-        info = self._engine.analyse(
-            board, chess.engine.Limit(depth=depth), multipv=multipv
-        )
+        with self._lock:
+            info = self._engine.analyse(
+                board, chess.engine.Limit(depth=depth), multipv=multipv
+            )
         lines = info if isinstance(info, list) else [info]
         best = lines[0]
         score_cp, mate_in = _to_cp(best["score"])
@@ -64,6 +75,17 @@ class StockfishClient:
         return {"score_cp": cp, "mate_in": None,
                 "best_line_san": [board.san(legal[0])] if legal else [],
                 "top_moves": top, "depth": depth}
+
+    def best_move(self, board: chess.Board, depth: int = 8):
+        """Pick a move to play (engine opponent). Mock mode: first legal move."""
+        res = self.analyse(board, depth)
+        if res["best_line_san"]:
+            try:
+                return board.parse_san(res["best_line_san"][0])
+            except ValueError:
+                pass
+        legal = list(board.legal_moves)
+        return legal[0] if legal else None
 
     def close(self):
         if self._engine:

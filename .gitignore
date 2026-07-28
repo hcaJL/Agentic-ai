@@ -18,10 +18,11 @@ env/
 *.env
 .env.*
 
-# Stockfish binary (user-local, not committed)
-stockfish
+# Stockfish binary and source (user-local, not committed)
+stockfish/
 stockfish.exe
 stockfish-*
+*.tar
 
 # ChromaDB data (runtime data, not source)
 chroma_data/
@@ -42,3 +43,6 @@ Thumbs.db
 
 # Logs
 *.log
+wget-log
+
+memory/chroma_db/

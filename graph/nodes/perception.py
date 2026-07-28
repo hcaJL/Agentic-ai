@@ -10,8 +10,9 @@ def perception_node(state: dict, engine) -> dict:
     board: chess.Board = state["board"]
     move: chess.Move = state["last_move"]
 
-    before = engine.analyse(board, config.SHALLOW_DEPTH)
+    before = engine.analyse(board, config.SHALLOW_DEPTH, multipv=config.MULTIPV)
     score_before = before["score_cp"]
+    played_san = board.san(move)
 
     board.push(move)  # board is now AFTER the move
     after = engine.analyse(board, config.SHALLOW_DEPTH, multipv=config.MULTIPV)
@@ -28,6 +29,8 @@ def perception_node(state: dict, engine) -> dict:
         "mate_in": after["mate_in"],
         "best_line_san": after["best_line_san"],
         "top_moves": after["top_moves"],
+        "top_moves_before": before["top_moves"],  # mover's own candidates
+        "played_san": played_san,
         "depth": after["depth"],
     }
     state["analysis"] = analysis

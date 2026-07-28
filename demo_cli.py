@@ -31,7 +31,12 @@ def main():
 
     engine = StockfishClient()
     mode = "MOCK engine (set STOCKFISH_PATH for real eval)" if engine.mock else "Stockfish"
-    print(f"=== Chess Broadcaster — {mode}, persona={persona} ===\n")
+    try:
+        import langgraph  # noqa: F401
+        flow = "LangGraph"
+    except ImportError:
+        flow = "sequential fallback"
+    print(f"=== Chess Broadcaster — {mode}, {flow}, persona={persona} ===\n")
 
     for mv, state in run_game(moves, engine, persona):
         ev = state["event"]
