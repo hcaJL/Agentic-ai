@@ -32,7 +32,7 @@ import tts
 from engine.stockfish_client import StockfishClient
 from graph.nodes.booth import (generate_closing, generate_filler,
                                generate_opening, generate_recap)
-from pipeline import make_stepper, moves_from_pgn
+from pipeline import make_stepper, pace_seconds, timed_moves_from_pgn
 
 app = FastAPI(title="Chess Broadcaster")
 
@@ -155,19 +155,19 @@ def _feedback_ctx(persona: str, intensity: float, facts: dict | None, san=None) 
     return {"persona": persona, "intensity": intensity, "tags": tags, "san": san}
 
 
-def _speak(text: str, speaker: str, intensity: float, opts: dict):
+def _speak(text: str, speaker: str, intensity: float, opts: dict, route=None):
     """Returns (base64_audio, format) — format is "wav" or "mp3" depending on
     which TTS provider served this line — or (None, None)."""
     if not opts.get("tts_on"):
         return None, None
-    result = tts.speak(text, speaker, intensity, opts.get("persona", "calm"))
+    result = tts.speak(text, speaker, intensity, opts.get("persona", "calm"), route)
     if not result:
         return None, None
     clip, fmt = result
     return base64.b64encode(clip).decode(), fmt
 
 
-def _speak_stream(turns: list[dict], intensity: float, opts: dict):
+def _speak_stream(turns: list[dict], intensity: float, opts: dict, route=None):
     """Synthesize every turn's audio concurrently, yielding (turn, audio, fmt)
     in script order as each finishes — not after the whole batch completes.
     All turns start synthesizing immediately, so the first line goes out
@@ -177,7 +177,7 @@ def _speak_stream(turns: list[dict], intensity: float, opts: dict):
     if not turns:
         return
     with ThreadPoolExecutor(max_workers=len(turns)) as pool:
-        futures = [pool.submit(_speak, t["text"], t["speaker"], intensity, opts)
+        futures = [pool.submit(_speak, t["text"], t["speaker"], intensity, opts, route)
                    for t in turns]
         for turn, fut in zip(turns, futures):
             audio, fmt = fut.result()
@@ -202,7 +202,7 @@ def _worker():
         if kind == "opening":
             turns = generate_opening(opts, opts.get("persona", "calm"))
             ctx = _feedback_ctx(opts["persona"], 0.4, None)
-            for i, (turn, audio, fmt) in enumerate(_speak_stream(turns, 0.4, opts)):
+            for i, (turn, audio, fmt) in enumerate(_speak_stream(turns, 0.4, opts, "opening")):
                 if gid != GAME["id"]:
                     return
                 _emit({"severity": "notable", "route": "opening",
@@ -218,7 +218,7 @@ def _worker():
             ply = len(pipe["move_history"])
             turns = generate_filler(pipe, opts["persona"], chat_log)
             ctx = _feedback_ctx(opts["persona"], 0.25, None)
-            for t, audio, fmt in _speak_stream(turns, 0.25, opts):
+            for t, audio, fmt in _speak_stream(turns, 0.25, opts, "filler"):
                 if gid != GAME["id"]:
                     return
                 _emit({"severity": "filler", "route": "filler",
@@ -232,6 +232,8 @@ def _worker():
         # kind == "move": drain any backlog into a batch. One move = normal
         # per-move script; several moves = ONE compressed「剛剛…」recap
         # focused on the batch's key move (like real commentators catching up).
+        # payload is (uci, think_seconds|None) — timing comes from a clocked PGN
+        # in replay mode and is None for live play.
         batch = [payload]
         while True:
             try:
@@ -250,10 +252,11 @@ def _worker():
         solo = len(batch) == 1
         infos, key = [], None                 # per-move digest; most important one
         _RANK = {"routine": 0, "notable": 1, "critical": 2}
-        for uci in batch:
+        for uci, think in batch:
             mv = chess.Move.from_uci(uci)
             pipe["last_move"] = mv
             pipe["persona"] = opts["persona"]
+            pipe["think_seconds"] = think
             pipe["skip_generation"] = not solo
             # "3-5" turns roughly doubles the LLM's generation time over "2-3"
             # (~3.9s vs ~1.8s measured) — that's the single biggest lever on
@@ -311,7 +314,7 @@ def _worker():
             # commentary to finish playing, not barge in over it (that was the
             # "搶話" at the end). flush=False queues it after; gap_before on the
             # first line gives a short breath before the sign-off starts.
-            for i, (turn, audio, fmt) in enumerate(_speak_stream(closing, 0.7, opts)):
+            for i, (turn, audio, fmt) in enumerate(_speak_stream(closing, 0.7, opts, "closing")):
                 if gid != GAME["id"]:
                     return
                 _emit({"severity": "critical", "route": "closing",
@@ -361,10 +364,11 @@ def _worker():
         ctx = _feedback_ctx(opts["persona"], intensity, facts_for_ctx,
                             (infos[0] if solo else key)["san"])
         flush = label == "critical"
-        for i, (turn, audio, fmt) in enumerate(_speak_stream(commentary, intensity, opts)):
+        route = "recap" if not solo else infos[0]["route"]
+        for i, (turn, audio, fmt) in enumerate(_speak_stream(commentary, intensity, opts, route)):
             if gid != GAME["id"]:
                 return
-            _emit({"severity": label, "route": "recap" if not solo else infos[0]["route"],
+            _emit({"severity": label, "route": route,
                    "speaker": turn["speaker"], "text": turn["text"], "ctx": ctx,
                    "audio": audio, "audio_format": fmt, "flush": flush and i == 0, "ply": last_ply})
             chat_log.append(turn)             # chat continues from what was said
@@ -480,6 +484,12 @@ def new_game(req: NewGameReq):
 # The client drives the pace — it calls /api/replay/next once the current move's
 # commentary has finished playing — so the booth never falls behind, moves are
 # never batched/skipped, and there are no long silences from a too-fast timer.
+#
+# On top of that floor, the players' REAL clock times (recovered from the PGN's
+# [%clk] annotations) shape the pacing: next_wait_ms is how long to linger
+# before the upcoming move, compressed by pipeline.pace_seconds so a 7-minute
+# think reads as a long pause instead of actually being one. The raw seconds
+# also ride along into the pipeline, where the booth can remark on them.
 GAMES_DIR = Path(__file__).parent / "games"
 
 
@@ -515,11 +525,13 @@ def replay(req: ReplayReq):
     if not path.exists():
         return {"error": "game not found"}
     try:
-        moves = moves_from_pgn(str(path))
+        timed = timed_moves_from_pgn(str(path))
     except Exception:
         return {"error": "could not read pgn"}
-    if not moves:
+    if not timed:
         return {"error": "empty game"}
+    moves = [mv for mv, _ in timed]
+    times = [s for _, s in timed]
     with _lock:
         GAME["id"] += 1
         GAME["board"] = chess.Board()
@@ -527,29 +539,37 @@ def replay(req: ReplayReq):
         GAME["feed"] = []
         GAME["opts"] = {"vs_engine": False, "human_is_white": True, "depth": 8,
                         "persona": req.persona, "tts_on": req.tts_on, "mode": "replay"}
-        GAME["replay"] = {"moves": moves, "idx": 0}
+        GAME["replay"] = {"moves": moves, "times": times, "idx": 0}
         gid = GAME["id"]
     _jobs.put(("reset", gid, None))
     publish({"type": "reset"})
     _jobs.put(("opening", gid, None))         # client fires the first move after this plays
     with _lock:
-        return _snapshot()
+        # next_wait_ms primes the client's pacing for move 1; every later move
+        # gets its own from /api/replay/next
+        return {**_snapshot(), "next_wait_ms": int(pace_seconds(times[0]) * 1000),
+                "clocked_moves": sum(s is not None for s in times)}
 
 
 @app.post("/api/replay/next")
 def replay_next():
     """Advance the replay by one move — client-paced, called once the current
-    move's commentary has finished playing. Returns {"done": bool}."""
+    move's commentary has finished playing AND the previous move's pacing debt
+    is paid. Returns {"done": bool, "next_wait_ms": int, "think_seconds": ...},
+    where next_wait_ms is how long to linger before asking for the move AFTER
+    this one (i.e. how long that player really thought, compressed)."""
     with _lock:
         gid = GAME["id"]
         rp = GAME.get("replay")
         if not rp or rp["idx"] >= len(rp["moves"]):
-            return {"done": True}
-        mv = rp["moves"][rp["idx"]]
-        rp["idx"] += 1
+            return {"done": True, "next_wait_ms": 0}
+        i = rp["idx"]
+        mv, think = rp["moves"][i], rp["times"][i]
+        rp["idx"] = i + 1
         done = rp["idx"] >= len(rp["moves"])
-    _push_move(mv, gid)
-    return {"done": done}
+        nxt = 0 if done else pace_seconds(rp["times"][rp["idx"]])
+    _push_move(mv, gid, think)
+    return {"done": done, "next_wait_ms": int(nxt * 1000), "think_seconds": think}
 
 
 @app.post("/api/opts")
@@ -561,19 +581,20 @@ def set_opts(req: OptsReq):
         return {"opts": GAME["opts"], "llm_available": config.USE_LLM}
 
 
-def _push_move(mv: chess.Move, gid: int):
+def _push_move(mv: chess.Move, gid: int, think: float | None = None):
     """Advance the live board and queue commentary. Caller holds no lock.
     Also broadcasts a board update over SSE so viewers who aren't the one
     making the move (replay mode, or the opponent's reply) see the piece move
-    live without polling."""
+    live without polling. `think` is the real seconds the mover spent, when
+    replaying a PGN that carries clocks."""
     with _lock:
         board: chess.Board = GAME["board"]
         GAME["sans"].append(board.san(mv))
         board.push(mv)
         snap = {"fen": board.fen(), "sans": list(GAME["sans"]),
                 "last_move": mv.uci(), "ply": len(GAME["sans"]),
-                "game_over": board.is_game_over()}
-    _jobs.put(("move", gid, mv.uci()))
+                "game_over": board.is_game_over(), "think_seconds": think}
+    _jobs.put(("move", gid, (mv.uci(), think)))
     publish({"type": "board", **snap})
 
 

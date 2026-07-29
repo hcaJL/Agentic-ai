@@ -30,7 +30,7 @@ PERSONAS = {
         ),
         "examples": [
             {"speaker": "play_by_play", "register": "high", "tags": ["sacrifice", "critical", "capture"],
-             "text": "喔喔喔他真的送下去了！這隻馬直接踩進 f7，你敢信？！"},
+             "text": "喔喔喔他真的送下去了！這隻馬直接踩進 f7，何意味？！"},
             {"speaker": "analyst", "register": "high", "tags": ["sacrifice", "critical"],
              "text": "對啦這就是炸雞肝那一套，弃一隻馬硬把王拉出來——後面有得看囉。"},
             {"speaker": "play_by_play", "register": "high", "tags": ["check", "brilliant"],

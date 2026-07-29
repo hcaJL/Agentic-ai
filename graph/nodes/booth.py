@@ -33,6 +33,28 @@ def _san_spoken(san: str, piece_en: str, to_name: str, is_capture: bool,
     return s
 
 
+def _think_note(seconds: float | None) -> str | None:
+    """How the booth would describe the clock time behind this move — or None
+    when the timing isn't worth a mention.
+
+    Deliberately sparse: only genuine long thinks and near-instant replies get a
+    note, so the commentary doesn't turn into a stopwatch readout on every move.
+    The key is omitted from facts entirely when this returns None, which is what
+    keeps the LLM from narrating times it wasn't given."""
+    if seconds is None:
+        return None
+    if seconds >= 60:
+        m, s = int(seconds // 60), int(seconds % 60)
+        dur = f"{m} 分 {s} 秒" if s else f"{m} 分鐘"
+        return (f"棋手在這步上花了 {dur}的長考，是明顯的關鍵決策點——"
+                "值得提一句他想了多久")
+    if seconds >= 25:
+        return f"棋手想了大約 {int(seconds)} 秒才落子，比前面幾步猶豫"
+    if seconds <= 2:
+        return "幾乎是秒下，看起來還在準備好的路線裡"
+    return None
+
+
 # ---------- FactsPacket assembly ----------
 def build_facts(state: dict, persona: str) -> dict:
     board: chess.Board = state["board"]
@@ -50,9 +72,13 @@ def build_facts(state: dict, persona: str) -> dict:
     san = before.san(move)
     piece_en = chess.piece_name(piece.piece_type) if piece else ""
     promotion_en = chess.piece_name(move.promotion) if move.promotion else None
+    think = _think_note(state.get("think_seconds"))
 
     return {
         "move": {
+            # present ONLY when the real clock says something worth saying —
+            # see _think_note (replay of a PGN with [%clk]; absent when live)
+            **({"think": think} if think else {}),
             "san": san,
             "san_spoken": _san_spoken(san, piece_en, chess.square_name(move.to_square),
                                       before.is_capture(move), promotion_en,

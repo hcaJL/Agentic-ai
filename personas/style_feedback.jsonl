@@ -282,3 +282,4 @@
 {"verdict": "good", "persona": "realcast", "speaker": "analyst", "text": "所以最後我們直接順利把他給槍殺了", "register": "mid", "tags": [], "san": null, "source": "reychess:h2Rg_VlBSvk", "ts": "2026-07-27T17:50:49"}
 {"verdict": "good", "persona": "realcast", "speaker": "play_by_play", "text": "那我會放在留言區", "register": "mid", "tags": [], "san": null, "source": "reychess:h2Rg_VlBSvk", "ts": "2026-07-27T17:50:49"}
 {"verdict": "good", "persona": "realcast", "speaker": "play_by_play", "text": "會有非常大的注意", "register": "mid", "tags": [], "san": null, "source": "reychess:h2Rg_VlBSvk", "ts": "2026-07-27T17:50:49"}
+{"verdict": "good", "persona": "excited", "speaker": "play_by_play", "text": "哇勒，黑方的皇后直接到 f6，這步棋讓局勢變得更加緊張了！雙方的攻防策略正在升級呀！", "register": "mid", "tags": ["fork", "notable"], "san": "Qf6", "ts": "2026-07-28T19:22:08"}

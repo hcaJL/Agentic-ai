@@ -99,7 +99,24 @@ h1 { font-size: 21px; font-weight: 700; letter-spacing: .06em;
 @keyframes pulse { 0%,100% {opacity:1; box-shadow:0 0 0 0 rgba(224,82,82,.5)}
                    50% {opacity:.55; box-shadow:0 0 0 6px rgba(224,82,82,0)} }
 
-/* ── Volume control ─────────────────────────────────────── */
+/* paused: the ON AIR light goes quiet so it's obvious nothing will speak */
+body.paused .onair {
+  border-color: var(--border); background: var(--panel-2); color: var(--muted);
+}
+body.paused .onair .dot { background: var(--muted); animation: none; }
+
+/* ── Pause / volume controls ────────────────────────────── */
+.pausectl {
+  padding: 6px 14px; border-radius: 24px;
+  border: 1px solid var(--border); background: var(--panel-2);
+  display: flex; align-items: center; gap: 7px;
+  color: var(--muted); font-size: 11.5px; letter-spacing: .1em;
+  cursor: pointer;
+}
+.pausectl:hover { color: var(--gold); border-color: rgba(212, 175, 116, .4); }
+.pausectl .ic { font-size: 14px; line-height: 1; }
+body.paused .pausectl { color: var(--gold); border-color: rgba(212, 175, 116, .45); }
+
 .volctl {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 14px; border-radius: 24px;
@@ -394,7 +411,10 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     <h1>棋訊直播間</h1>
     <div class="sub">CHESS BROADCAST STUDIO</div>
   </div>
-  <div class="onair"><span class="dot"></span>ON AIR</div>
+  <div class="onair" id="onair"><span class="dot"></span>ON AIR</div>
+  <button class="pausectl" id="pauseBtn" title="暫停 / 繼續播報（空白鍵）">
+    <span class="ic" id="pauseIc">⏸</span><span id="pauseTxt">暫停播報</span>
+  </button>
   <div class="volctl" id="volCtl">
     <button class="volbtn" id="volBtn" title="靜音 / 取消靜音">🔊</button>
     <input type="range" id="volSlider" min="0" max="100" value="80" title="音量">
@@ -412,7 +432,8 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
         <div class="pill on" data-v="calm">沉穩</div>
         <div class="pill" data-v="excited">熱血</div>
         <div class="pill" data-v="realcast">真人</div>
-        <div class="pill" data-v="personas2">熱血真人</div>
+        <!-- 熱血真人先隱藏（personas/personas.py 的 "personas2" 語料仍在，取消註解即可回來）
+        <div class="pill" data-v="personas2">熱血真人</div> -->
       </div>
     </div>
 
@@ -708,7 +729,7 @@ function renderMeta() {
 
 /* ── audio queue: utterances play in order; flush = barge-in ── */
 const AudioQ = {
-  q: [], cur: null, pending: false, lastEnd: Date.now(),
+  q: [], cur: null, pending: false, paused: false, lastEnd: Date.now(),
   enqueue(b64, flush, sev, ply, fmt, gap) {
     if (flush) this.flush();
     this.q.push({ b64, sev, ply, fmt: fmt || 'mp3', gap: gap ? 900 : 0 });
@@ -719,6 +740,24 @@ const AudioQ = {
     if (this.pendingTimer) { clearTimeout(this.pendingTimer); this.pendingTimer = null; }
     this.pending = false;
     if (this.cur) { try { this.cur.pause(); } catch (e) {} this.cur = null; }
+  },
+  // Pause mid-sentence: the clip keeps its playback position and everything
+  // still queued stays queued, so 繼續 picks up exactly where it stopped.
+  pause() {
+    if (this.paused) return;
+    this.paused = true;
+    if (this.pendingTimer) { clearTimeout(this.pendingTimer); this.pendingTimer = null; }
+    this.pending = false;          // the gap item is still at the head of q
+    if (this.cur) { try { this.cur.pause(); } catch (e) {} }
+  },
+  resume(ply) {
+    if (!this.paused) return;
+    this.paused = false;
+    this.trim(ply);                // don't dump a pile of stale lines on resume
+    if (this.cur) {
+      const a = this.cur;
+      a.play().catch(() => { this.cur = null; this.lastEnd = Date.now(); this.pump(); });
+    } else this.pump();
   },
   // staleness tolerance by importance (in plies): chatter about an old
   // position is pointless, but a critical clip is worth hearing even late
@@ -732,10 +771,13 @@ const AudioQ = {
     });
   },
   pump() {
-    if (this.cur || this.pending || !this.q.length) return;
-    const item = this.q.shift();
+    if (this.paused || this.cur || this.pending || !this.q.length) return;
+    const item = this.q[0];        // stays queued until it actually starts, so
+                                   // pausing during its gap doesn't lose it
     const play = () => {
-      this.pending = false;
+      this.pending = false; this.pendingTimer = null;
+      if (this.paused || this.q[0] !== item) return;
+      this.q.shift();
       const a = new Audio(`data:audio/${item.fmt};base64,` + item.b64);
       a.volume = VOLUME;
       this.cur = a;
@@ -746,15 +788,42 @@ const AudioQ = {
       // playing, ask for the next batch so it arrives before the silence
       if (item.sev === 'filler' && this.q.length === 0) requestFiller('continue');
     };
-    if (item.gap) {   // a short breath before this clip (e.g. before the sign-off)
+    if (item.gap && !item.gapDone) {  // a short breath before this clip (e.g. before the sign-off)
+      item.gapDone = true;            // only wait it out once, even across a pause
       this.pending = true;
       this.pendingTimer = setTimeout(play, item.gap);
     } else play();
   },
-  idleMs() { return (this.cur || this.pending || this.q.length) ? 0 : Date.now() - this.lastEnd; },
+  // paused counts as "busy": no filler chatter, and a replay never advances
+  // past the move whose commentary is still waiting to be heard
+  idleMs() {
+    if (this.paused || this.cur || this.pending || this.q.length) return 0;
+    return Date.now() - this.lastEnd;
+  },
 };
 
-function playB64(b64, fmt) { AudioQ.enqueue(b64, true, 'replay', undefined, fmt); }
+function playB64(b64, fmt) {
+  if (AudioQ.paused) setPaused(false);   // hitting ▶ on a card resumes the booth
+  AudioQ.enqueue(b64, true, 'replay', undefined, fmt);
+}
+
+/* ── pause: silence the booth mid-sentence and freeze a replay ──
+   Text keeps arriving in the feed; only speech (and the replay's pacing,
+   which follows the speech) stops. Resuming continues the same clip. */
+function setPaused(on) {
+  if (on) AudioQ.pause();
+  else AudioQ.resume(S && S.sans ? S.sans.length : undefined);
+  document.body.classList.toggle('paused', on);
+  $('#pauseIc').textContent = on ? '▶' : '⏸';
+  $('#pauseTxt').textContent = on ? '繼續播報' : '暫停播報';
+  $('#onair').lastChild.textContent = on ? 'PAUSED' : 'ON AIR';
+}
+$('#pauseBtn').addEventListener('click', () => setPaused(!AudioQ.paused));
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Space' || e.target.closest('input, select, textarea, button')) return;
+  e.preventDefault();
+  setPaused(!AudioQ.paused);
+});
 
 /* ── 角色記錄檔: thumbs a booth line into (or out of) the style profile ── */
 function wireRating(el, e) {
@@ -842,12 +911,14 @@ function connectStream() {
       syncPieces(e.fen);
       renderMeta();
     } else if (e.type === 'step_done') {
-      // this move's (or the opening's) commentary is fully generated + emitted;
-      // the replay driver may advance once the audio finishes playing
-      if (replayOn) replayStepReady = true;
+      // opening remark is out — release the clock-driven replay driver. Later
+      // step_done events change nothing: from here the board follows the
+      // players' clocks, not the booth.
+      if (replayOn && e.kind === 'opening') replayStarted = true;
     } else if (e.type === 'reset') {
       EVAL = null;
       AudioQ.flush();
+      setPaused(false);       // a fresh game/replay is never born paused
     }
   };
   // EventSource auto-reconnects on error
@@ -868,25 +939,48 @@ function renderEval() {
 let lastFillerReq = 0;
 function requestFiller(mode) {
   if (!S || !S.sans || !S.sans.length || S.game_over || busy) return;
-  const cooldown = mode === 'continue' ? 4000 : 12000;
+  // replay runs at the players' pace, not a human's, so silences open up more
+  // often than in a live game — restarting chatter has to be quicker there
+  const cooldown = mode === 'continue' ? 4000 : (replayMode() ? 6000 : 12000);
   if (Date.now() - lastFillerReq < cooldown) return;
   lastFillerReq = Date.now();
   fetch('/api/filler', { method: 'POST' }).catch(() => {});
 }
-// replay is client-paced: advance once this move's commentary is generated
-// (step_done) AND its audio has played out (AudioQ idle) — no fixed timer, so
-// exciting moves get their full spoken line and quiet moves breeze past.
-let replayOn = false, replayStepReady = false, replayPending = false;
+/* replay pacing: the CLOCK drives the board, exactly like the live game does.
+   A move goes down when the player's own (compressed) thinking time has
+   elapsed — next_wait_ms, derived from the PGN's real [%clk] — and the booth
+   is left to keep up on its own, which is what a real broadcast sounds like.
+   The catch-up machinery it needs already exists and only ever fires here:
+   the worker batches a backlog into one「剛剛…」recap, AudioQ.trim() drops
+   stale chatter, and a critical line flushes whatever is still playing.
+   replayStarted is just the opening gate — the first move waits for the
+   welcome remark, nothing after that waits for anything but the clock. */
+let replayOn = false, replayStarted = false, replayPending = false;
+let replayWaitMs = 0, replayWaitFrom = 0;   // pacing debt owed before the next move
 setInterval(() => {
   if (replayMode() && replayOn) {
-    if (replayStepReady && !replayPending && AudioQ.idleMs() >= 700) {
-      replayStepReady = false; replayPending = true;
+    if (AudioQ.paused) return;
+    const waited = Date.now() - replayWaitFrom;
+    if (replayStarted && !replayPending && waited >= replayWaitMs) {
+      replayPending = true;
       fetch('/api/replay/next', { method: 'POST' })
         .then(r => r.json())
-        .then(d => { replayPending = false; if (d.done) replayOn = false; })
+        .then(d => {
+          replayPending = false;
+          replayWaitMs = d.next_wait_ms || 0;
+          replayWaitFrom = Date.now();
+          if (d.done) replayOn = false;
+        })
         .catch(() => { replayPending = false; });
+    } else if (replayStarted && AudioQ.idleMs() >= 2500) {
+      // Dead air, same as the live game — and in a replay it is the MAIN way
+      // the booth speaks during a fast opening: routine moves are silent by
+      // design (booth.py), so at ~1.5s/move a blitz opening would otherwise
+      // pass without a single word. Chatter covers it, and a long think gets
+      // covered by the same rule for free.
+      requestFiller('idle');
     }
-    return;                        // no dead-air filler while replaying
+    return;
   }
   if (AudioQ.idleMs() >= 5000) requestFiller('idle');
 }, 500);
@@ -1036,6 +1130,7 @@ $('#volBtn').addEventListener('click', () => {
 
 $('#btnNew').addEventListener('click', async () => {
   replayOn = false;                    // leaving replay mode for a live game
+  setPaused(false);                    // a new game always goes back on air
   const vsEngine = pillVal('#oppPills') === 'engine';
   const humanWhite = pillVal('#colorPills') === 'white';
   orientation = (!vsEngine || humanWhite) ? 'white' : 'black';
@@ -1068,6 +1163,7 @@ async function loadGames() {
 async function startReplay() {
   const pgn = $('#gameSelect').value;
   if (!pgn) return;
+  setPaused(false);
   sel = null;
   $('#feed').innerHTML = '<div class="feedempty">名局重放中，主播即時解說…</div>';
   busy = true; renderMeta?.call?.(null);
@@ -1081,7 +1177,8 @@ async function startReplay() {
     busy = false;
     applySnapshot(data);   // board follows the rest live via SSE 'board' events
     // arm the client-paced driver; the opening remark's step_done fires move 1
-    replayStepReady = false; replayPending = false; replayOn = true;
+    replayStarted = false; replayPending = false; replayOn = true;
+    replayWaitMs = data.next_wait_ms || 0; replayWaitFrom = Date.now();
   } catch (e) { console.error(e); busy = false; }
 }
 

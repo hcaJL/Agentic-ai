@@ -34,12 +34,19 @@ _PERSONA_PROSODY = {
 # get capped now — "excited" highest since it's meant to stay lively.
 _TEMP_CAP = {"calm": 0.65, "excited": 0.75}
 
+# Extra speed on top of the persona multiplier, for specific routes.
+# 真人語料的開場白與閒聊都跑在最低的 intensity 檔（0.4 / 0.25 → speed 0.9），
+# 而 realcast 沒有 calm 那份 play_by_play 加速，講起來就慢半拍、開場拖很長。
+# 只提這兩條路徑，實際講棋（light/deep/recap/closing）的節奏不動。
+_ROUTE_SPEED = {("realcast", "opening"): 1.2, ("realcast", "filler"): 1.2}
 
-def _fish_prosody(intensity: float, persona: str, speaker: str) -> tuple[float, float]:
+
+def _fish_prosody(intensity: float, persona: str, speaker: str,
+                  route: str | None = None) -> tuple[float, float]:
     """(speed, temperature) — mirrors the three register tiers used for text
     and the edge-tts fallback, then scaled by persona (optionally per
-    speaker too). speed range is [0.5, 2.0] per Fish's API; temperature
-    [0, 1] controls expressiveness/randomness."""
+    speaker too) and by route. speed range is [0.5, 2.0] per Fish's API;
+    temperature [0, 1] controls expressiveness/randomness."""
     if intensity >= 0.8:
         speed, temp = 1.3, 0.9    # 情緒沸騰
     elif intensity >= 0.5:
@@ -48,15 +55,17 @@ def _fish_prosody(intensity: float, persona: str, speaker: str) -> tuple[float, 
         speed, temp = 0.9, 0.5   # 平穩沉著
     speed_mul, temp_mul = _PERSONA_PROSODY.get(
         (persona, speaker), _PERSONA_PROSODY.get(persona, (1.0, 1.0)))
+    speed_mul *= _ROUTE_SPEED.get((persona, route), 1.0)
     temp = min(temp * temp_mul, _TEMP_CAP.get(persona, 1.0))
     return max(0.5, min(2.0, speed * speed_mul)), max(0.0, min(1.0, temp))
 
 
-def _fish_speak(text: str, speaker: str, intensity: float, persona: str):
+def _fish_speak(text: str, speaker: str, intensity: float, persona: str,
+                route: str | None = None):
     import requests
     voices = config.FISHAUDIO_VOICES.get(persona, config.FISHAUDIO_VOICES["calm"])
     reference_id = voices.get(speaker, voices["play_by_play"])
-    speed, temperature = _fish_prosody(intensity, persona, speaker)
+    speed, temperature = _fish_prosody(intensity, persona, speaker, route)
     try:
         resp = requests.post(
             "https://api.fish.audio/v1/tts",
@@ -80,13 +89,17 @@ def _fish_speak(text: str, speaker: str, intensity: float, persona: str):
 
 
 # ---------- edge-tts (fallback — local/free, no key) ----------
-def _edge_prosody(intensity: float) -> tuple[str, str]:
-    """(rate, pitch) offsets — same three register tiers, edge-tts's own syntax."""
+def _edge_prosody(intensity: float, speed_mul: float = 1.0) -> tuple[str, str]:
+    """(rate, pitch) offsets — same three register tiers, edge-tts's own syntax.
+    speed_mul carries the same per-persona/route speed-up the Fish path applies,
+    so a persona doesn't change pace just because it fell back to edge-tts."""
     if intensity >= 0.8:
-        return "+10%", "+15Hz"
-    if intensity >= 0.5:
-        return "+0%", "+5Hz"
-    return "-10%", "+0Hz"
+        rate, pitch = 10, "+15Hz"
+    elif intensity >= 0.5:
+        rate, pitch = 0, "+5Hz"
+    else:
+        rate, pitch = -10, "+0Hz"
+    return f"{round((1 + rate / 100) * speed_mul * 100 - 100):+d}%", pitch
 
 
 async def _edge_synthesize(text: str, voice: str, rate: str, pitch: str) -> bytes:
@@ -99,12 +112,13 @@ async def _edge_synthesize(text: str, voice: str, rate: str, pitch: str) -> byte
     return buf.getvalue()
 
 
-def _edge_speak(text: str, speaker: str, intensity: float):
+def _edge_speak(text: str, speaker: str, intensity: float,
+                persona: str = "calm", route: str | None = None):
     """One retry: edge-tts occasionally drops a connection under concurrent
     load (several turns fire at once), and a retry is far cheaper than
     losing audio for that line."""
     voice = config.TTS_VOICES.get(speaker, config.TTS_VOICES["play_by_play"])
-    rate, pitch = _edge_prosody(intensity)
+    rate, pitch = _edge_prosody(intensity, _ROUTE_SPEED.get((persona, route), 1.0))
     for attempt in range(2):
         try:
             data = asyncio.run(_edge_synthesize(text, voice, rate, pitch))
@@ -115,16 +129,18 @@ def _edge_speak(text: str, speaker: str, intensity: float):
     return None
 
 
-def speak(text: str, speaker: str, intensity: float = 0.2, persona: str = "calm"):
-    """Synthesize one commentary turn. Returns (audio_bytes, format) — format
-    is always "mp3" here — or None if both providers are unavailable.
-    Safe to call from any thread."""
+def speak(text: str, speaker: str, intensity: float = 0.2, persona: str = "calm",
+          route: str | None = None):
+    """Synthesize one commentary turn. `route` is the booth route this line came
+    from ("opening"/"filler"/"light"/…) — only used for per-route pacing tweaks.
+    Returns (audio_bytes, format) — format is always "mp3" here — or None if
+    both providers are unavailable. Safe to call from any thread."""
     if not text:
         return None
     if config.FISHAUDIO_API_KEY:
-        audio = _fish_speak(text, speaker, intensity, persona)
+        audio = _fish_speak(text, speaker, intensity, persona, route)
         if audio:
             return audio, "mp3"
         logging.warning("Fish Audio TTS unavailable for this line, falling back to edge-tts")
-    data = _edge_speak(text, speaker, intensity)
+    data = _edge_speak(text, speaker, intensity, persona, route)
     return (data, "mp3") if data else None
